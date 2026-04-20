@@ -1,5 +1,17 @@
 allow_embedding: false
 db_schema:
+  api_usage:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: api_usage
+  eval_runs:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: eval_runs
   files:
     client: none
     columns:
@@ -25,15 +37,23 @@ renamed: true
 runtime_options:
   client_version: '3'
   legacy_features: {bootstrap3: true, class_names: true}
-  server_spec: {base: python310-minimal}
+  server_spec: {base: python310-datascience}
+  server_spec_disabled: {base: python310-datascience}
+  server_version: python3-full
   version: 3
 secrets:
   ANTHROPIC_API_KEY:
     type: secret
     value: {UAYNGOMA6Z4REMAB: wu6r4h6vd89Zbnk6LExpQBo8KlB7Ge7sjQU9wICv3ae5MJRDbAulqq3QoFEVbWwU7eSbcEXmjYhXaOzikPWDBVHvkTBr1QJxp/oLN74U3J/3eTyaJu/SuGInjZHzy4s2KkEIVqBgMjNwN/9ZBf3JCvCD+w+cLtwMAa9rENbkXz1uKzImhiUdYuttpFdolX/PkYQKVPyV0NbSBE5KuIWM4h9Mp9ymnlultmYYh5opFM9BP7kzrIoU9MdnMgLdhgEAJKD3RctF5qotMFM=}
+  API_KEY_ALIASES:
+    type: secret
+    value: {UAYNGOMA6Z4REMAB: kQXjGd5BI7JXhJFYVBRdD4tkWgr3g7C0Itr0PZVlDSp4SRezpO3jHR/O4miW2BePGobbgkYqpIhnejBid0zrOVXot/ERu8yiR/BETYkMf/bUX5cOdkOrDsu97rE8nIUHyKhz}
+  API_KEY_hans:
+    type: secret
+    value: {UAYNGOMA6Z4REMAB: /lDvN4vYII0Eh+tqm1RTepG6ixuBm9bqP6uUYQmDOAtdrF5+2wHGXYFq2tK7ypdevbqugl541B82ETFHs2FanlBNJXGxRkBKP2z5yQvehbNAlqMLFVrVrKP29+d+V3srOSXLusjlEa6sBJNeS1NgF5FW6N9kuJkJXJzvFP079eq5QHqXlZ4rMg==}
 services:
 - client_config: {enable_v2: true}
-  server_config: {}
+  server_config: {auto_create_missing_columns: true}
   source: /runtime/services/tables.yml
 - client_config: {}
   server_config: {}
