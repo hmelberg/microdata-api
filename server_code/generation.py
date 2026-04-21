@@ -36,8 +36,10 @@ TOOLS = [
         "name": "lookup_variable",
         "description": (
             "Resolve a term or phrase to one or more microdata.no variables. "
-            "Use this whenever you are unsure if a variable exists or want "
-            "alternatives. Supports Norwegian and English queries."
+            "ONLY use this when the candidate list in the user turn does not "
+            "contain a variable that fits the request. The candidates are "
+            "already ranked by relevance — prefer them. Make at most one "
+            "tool call per request. Supports Norwegian and English queries."
         ),
         "input_schema": {
             "type": "object",
@@ -174,9 +176,10 @@ def generate_script(
 ) -> dict:
     client = _client()
 
-    # Retrieval.
+    # Retrieval. Wider candidate set so the model rarely needs lookup_variable
+    # mid-generation, which keeps total latency under Anvil's 30s execution cap.
     cmd_keywords = []
-    candidates = retrieval.search_variables(question, lang=lang, k=15)
+    candidates = retrieval.search_variables(question, lang=lang, k=25)
     examples = retrieval.search_examples(question, lang=lang, k=3, boost_commands=cmd_keywords)
     manual_sections = retrieval.search_manual(question, lang=lang, k=2)
 
