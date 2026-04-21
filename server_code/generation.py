@@ -91,7 +91,7 @@ def _run_tool_loop(
     model: str,
     system: str,
     messages: list[dict],
-    max_tool_turns: int = 6,
+    max_tool_turns: int = 10,
 ) -> tuple[dict | None, dict, str]:
     """Return (parsed_json, usage, raw_text)."""
     for _ in range(max_tool_turns):
