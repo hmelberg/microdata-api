@@ -288,6 +288,10 @@ def http_validate():
 # /variables/search
 
 
+# NOTE: previously "/variables/search" — multi-segment paths appear to break
+# routing on this Anvil runtime; re-registered as a single segment. Both names
+# are exposed for backwards compat.
+@anvil.server.http_endpoint("/variables_search", methods=["GET"], cross_site_session=False)
 @anvil.server.http_endpoint("/variables/search", methods=["GET"], cross_site_session=False)
 def http_variables_search():
     import traceback
