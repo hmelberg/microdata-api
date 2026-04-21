@@ -157,6 +157,46 @@ import fnpr/NIVA as isf_level             // ISF funding level
 """
 
 
+MERGE_CHEATSHEET = """\
+## Merging datasets
+
+The microdata.no platform supports ONE merge syntax:
+
+    merge <var-list> into <target_dataset> [on <key_variable>]
+
+It pushes variables FROM the active dataset INTO the named target. So before
+calling `merge ... into Y`, you must `use X` to make the source dataset
+active. Common pattern:
+
+    use npr_astma                       // make source active
+    merge astma into personer on pid    // push astma into personer
+
+The `on <var>` clause names the join key. The variable must exist in BOTH
+datasets (typically the person-id alias, e.g. `pid`). When you collapsed the
+source by a NPR/FNR person-ref alias (e.g. `collapse ... by(pid)`), the
+platform also auto-detects the link to PERSONID_1 in the target — but it is
+clearer to always pass `on <alias>` explicitly.
+
+**Common mistakes — DO NOT WRITE:**
+
+- `merge astma from npr_astma on pid` — the `from` syntax does not exist
+- `merge ... into personer` while `personer` is the active dataset — you'd
+  be merging from itself; switch with `use <other_name>` first
+
+**Canonical NPR→person merge pattern:**
+
+```microdata
+// ... build npr_astma with imports + collapse (max) astma -> astma, by(pid)
+// ... build personer with create-dataset + several db imports
+
+use npr_astma
+merge astma into personer on pid
+use personer
+replace astma = 0 if astma == .   // unmatched persons → no admission
+```
+"""
+
+
 def build_entity_links_block() -> str:
     """Render the auto-derived entity→person-ref mapping + conventions.
 
@@ -318,6 +358,7 @@ def cached_prefix() -> str:
                     DATABANK_CHEATSHEET,
                     build_entity_links_block(),
                     NPR_CANONICAL_IMPORTS,
+                    MERGE_CHEATSHEET,
                     DATE_QUIRKS,
                     PRIVACY_RULES,
                     build_top_variables_block(),
