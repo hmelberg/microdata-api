@@ -288,56 +288,19 @@ def http_validate():
 # /variables/search
 
 
-# NOTE: previously "/variables/search" — multi-segment paths appear to break
-# routing on this Anvil runtime; re-registered as a single segment. Both names
-# are exposed for backwards compat.
-@anvil.server.http_endpoint("/variables_search", methods=["GET"], cross_site_session=False)
 @anvil.server.http_endpoint("/variables/search", methods=["GET"], cross_site_session=False)
-def http_variables_search():
-    import traceback
+def http_variables_search(**kwargs):
+    # Anvil passes GET query-string params as function kwargs.
+    alias, err = _authenticate_or_fail()
+    if err:
+        return err
+    q = (kwargs.get("q") or "").strip()
+    lang = kwargs.get("lang") or "no"
     try:
-        alias, err = _authenticate_or_fail()
-        if err:
-            return err
-        req = anvil.server.request
-        # Anvil's request.query_params behaviour varies by runtime version;
-        # try the canonical attribute first, fall back to parsing the path.
-        try:
-            params = req.query_params or {}
-        except Exception:
-            params = {}
-        if not params:
-            try:
-                from urllib.parse import urlparse, parse_qs
-                qs = urlparse(req.path or "").query
-                if not qs and "?" in (req.path or ""):
-                    qs = (req.path or "").split("?", 1)[1]
-                parsed = parse_qs(qs)
-                params = {k: v[0] for k, v in parsed.items()}
-            except Exception:
-                pass
-
-        q = (params.get("q") or "").strip()
-        lang = params.get("lang") or "no"
-        try:
-            k = int(params.get("k", 15))
-        except (TypeError, ValueError):
-            k = 15
-        if not q:
-            return _json(
-                {"error": "missing 'q'", "params_seen": list(params.keys())},
-                status=400,
-            )
-
-        results = retrieval.server_variable_search(query=q, lang=lang, k=k)
-        return _json({"results": results})
-    except Exception as exc:
-        # Surface the real cause so we can debug instead of staring at a generic 500.
-        return _json(
-            {
-                "error": "internal error",
-                "exception": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc().splitlines()[-6:],
-            },
-            status=500,
-        )
+        k = int(kwargs.get("k", 15))
+    except (TypeError, ValueError):
+        k = 15
+    if not q:
+        return _json({"error": "missing 'q'"}, status=400)
+    results = retrieval.server_variable_search(query=q, lang=lang, k=k)
+    return _json({"results": results})
