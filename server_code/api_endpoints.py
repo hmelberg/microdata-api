@@ -19,6 +19,7 @@ import anvil.server
 from anvil.server import HttpResponse
 
 import generation
+import classifier
 import retrieval
 import utils
 import validation
@@ -59,6 +60,11 @@ def _authenticate_or_fail():
 
 @anvil.server.http_endpoint("/query", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_query():
+    """Smart router. Fast intents (qa, variable_search) run synchronously
+    and return the full envelope. Slow intent (script_gen) runs as a
+    background task — response carries `task_id` + `mode: "async"` and the
+    client polls /task_status until completion.
+    """
     alias, err = _authenticate_or_fail()
     if err:
         return err
@@ -71,48 +77,122 @@ def http_query():
     max_repair = int(body.get("max_repair", 1))
     deep_validate = bool(body.get("deep_validate", False))
 
+    # Cheap classifier call up front so we can decide sync vs async.
+    cls = classifier.classify(question, default_lang=lang)
+    intent = cls.get("intent", "qa")
+    resolved_lang = cls.get("lang", lang)
+
+    classifier_block = {
+        "model": cls.get("model"),
+        "usage": cls.get("usage") or {},
+        "fallback": cls.get("fallback"),
+    }
+
+    if intent == "script_gen":
+        # Async — Anvil's 30s HTTP cap doesn't apply to background tasks.
+        task = anvil.server.launch_background_task(
+            "bg_smart_query",
+            question, resolved_lang, max_repair, deep_validate,
+        )
+        task_id = task.get_id()
+        utils.log_request(
+            endpoint="/query:script_gen:launched",
+            question=question,
+            lang=resolved_lang,
+            model="",
+            api_key_alias=alias,
+        )
+        return _json({
+            "intent": intent,
+            "lang": resolved_lang,
+            "terms": cls.get("terms") or [],
+            "classifier": classifier_block,
+            "task_id": task_id,
+            "mode": "async",
+        })
+
+    # Sync paths — qa, variable_search.
     t0 = time.time()
-    envelope = generation.smart_query(
-        question=question,
-        lang=lang,
-        max_repair=max_repair,
-        deep_validate=deep_validate,
-    )
+    if intent == "variable_search":
+        hits = retrieval.server_variable_search(query=question, lang=resolved_lang, k=15)
+        result = {"variables": hits}
+    else:  # qa or unknown
+        result = generation.answer_question(question=question, lang=resolved_lang)
     latency_ms = int((time.time() - t0) * 1000)
 
-    intent = envelope.get("intent", "qa")
-    result = envelope.get("result") or {}
+    utils.log_request(
+        endpoint=f"/query:{intent}",
+        question=question,
+        lang=resolved_lang,
+        model=result.get("model", ""),
+        latency_ms=latency_ms,
+        cache_stats=result.get("cache_stats") or {},
+        api_key_alias=alias,
+    )
 
-    # Pull mode-specific fields out for structured logging.
-    if intent == "script_gen":
-        utils.log_request(
-            endpoint=f"/query:{intent}",
-            question=question,
-            lang=envelope.get("lang", lang),
-            model=result.get("model", ""),
-            script=result.get("script", ""),
-            variables_used=result.get("variables_used", []),
-            commands_used=result.get("commands_used", []),
-            validation_passed=(result.get("validation") or {}).get("passed", False),
-            validation_tier=(result.get("validation") or {}).get("tier_ran", "static"),
-            errors=(result.get("validation") or {}).get("errors", []),
-            latency_ms=latency_ms,
-            cache_stats=result.get("cache_stats") or {},
-            api_key_alias=alias,
-        )
-    else:
-        utils.log_request(
-            endpoint=f"/query:{intent}",
-            question=question,
-            lang=envelope.get("lang", lang),
-            model=result.get("model", ""),
-            latency_ms=latency_ms,
-            cache_stats=result.get("cache_stats") or {},
-            api_key_alias=alias,
-        )
+    return _json({
+        "intent": intent,
+        "lang": resolved_lang,
+        "terms": cls.get("terms") or [],
+        "classifier": classifier_block,
+        "result": result,
+        "mode": "sync",
+        "latency_ms": latency_ms,
+    })
 
-    envelope["latency_ms"] = latency_ms
-    return _json(envelope)
+
+# ---------------------------------------------------------------------------
+# /task_status  (poll a background task launched by /query)
+
+
+@anvil.server.http_endpoint("/task_status", methods=["GET"], cross_site_session=False, enable_cors=True)
+def http_task_status(**kwargs):
+    alias, err = _authenticate_or_fail()
+    if err:
+        return err
+    task_id = (kwargs.get("task_id") or "").strip()
+    if not task_id:
+        return _json({"error": "missing 'task_id'"}, status=400)
+
+    try:
+        task = anvil.server.get_background_task(task_id)
+    except Exception as exc:
+        return _json({"error": f"task lookup failed: {exc}"}, status=404)
+
+    if task is None:
+        return _json({"error": "task not found"}, status=404)
+
+    if not task.is_completed():
+        return _json({"status": "running"})
+
+    term = task.get_termination_status()
+    if term == "completed":
+        result = task.get_return_value()  # full smart_query envelope
+        # Log the completed run with full structured fields.
+        try:
+            r = (result or {}).get("result") or {}
+            utils.log_request(
+                endpoint=f"/query:{result.get('intent','script_gen')}:completed",
+                question="",  # original question already logged at launch
+                lang=(result or {}).get("lang", ""),
+                model=r.get("model", ""),
+                script=r.get("script", ""),
+                variables_used=r.get("variables_used", []),
+                commands_used=r.get("commands_used", []),
+                validation_passed=(r.get("validation") or {}).get("passed", False),
+                validation_tier=(r.get("validation") or {}).get("tier_ran", "static"),
+                errors=(r.get("validation") or {}).get("errors", []),
+                cache_stats=r.get("cache_stats") or {},
+                api_key_alias=alias,
+            )
+        except Exception:
+            pass
+        return _json({"status": "completed", "result": result})
+
+    # killed / failed
+    err_obj = task.get_error()
+    err_msg = getattr(err_obj, "message", None) or str(err_obj)
+    return _json({"status": term or "failed", "error": err_msg})
 
 
 # ---------------------------------------------------------------------------

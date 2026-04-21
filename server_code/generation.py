@@ -15,6 +15,7 @@ import json
 from typing import Any
 
 import anvil.secrets
+import anvil.server
 from anthropic import Anthropic
 
 import classifier
@@ -388,6 +389,22 @@ def revise_script(
     }
 
 
+@anvil.server.background_task
+def bg_smart_query(question, lang="no", max_repair=1, deep_validate=False):
+    """Background-task wrapper around smart_query.
+
+    Used by /query for script_gen intent so that long generations are not
+    cut off by Anvil's 30s HTTP execution cap. Returns the same envelope
+    that smart_query returns.
+    """
+    return smart_query(
+        question=question,
+        lang=lang,
+        max_repair=max_repair,
+        deep_validate=deep_validate,
+    )
+
+
 def smart_query(
     question: str,
     lang: str = "no",
@@ -420,10 +437,8 @@ def smart_query(
     }
 
     if intent == "script_gen":
-        # /query path: force max_repair=0 so we stay under Anvil's 30s
-        # execution cap. Callers who want repair can hit /generate directly.
         envelope["result"] = generate_script(
-            question=question, lang=resolved_lang, max_repair=0
+            question=question, lang=resolved_lang, max_repair=max_repair
         )
         if deep_validate and envelope["result"].get("script"):
             deep = validation.validate_dry_run(envelope["result"]["script"])
