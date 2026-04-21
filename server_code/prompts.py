@@ -131,10 +131,11 @@ source metadata, so:
   mixing them in one dataset triggers a `unit_id` error. AGGRSHOPPID is
   rarely needed; the dataset's implicit event identifier suffices for most
   analyses.
-- For **collapse**, omit `by()` to default-group by the person id. The
-  platform knows NPRID is the person variable and uses it as the default
-  groupby. So `collapse (count) icd1 -> n_dx` gives one row per person with
-  the diagnosis count — no explicit `by(NPRID)` required.
+- For **collapse**, **ALWAYS specify `by(<person-alias>)` explicitly**, e.g.
+  `collapse (max) astma -> astma, by(pid)` or
+  `collapse (count) icd1 -> n_dx, by(pid)`. Without an explicit `by()`, the
+  collapse may not group by person as you'd expect. Use the alias you set
+  in `import fnpr/NPRID as <alias>` (typically `pid`).
 
 Recommended imports and aliases:
 
