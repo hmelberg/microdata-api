@@ -43,11 +43,13 @@ GRAMMAR_CHEATSHEET = """\
 ## microdata.no DSL — minimal grammar
 
 - Comments start with `//`.
-- Every script begins with `create-dataset <name>` (or `use <name>`), then
-  one or more `import` statements bringing variables in from a databank.
+- Every script begins with `require <databank> as <alias>` (see Databank
+  cheat sheet below), then `create-dataset <name>` (or `use <name>`), then
+  one or more `import` statements bringing variables in from the databank.
 - Import syntax:
-    - Cross-section:  `import fd/VAR_NAME [YYYY-MM-DD] [as alias]`
-    - Event:          `import fd/VAR_NAME YYYY-MM-DD to YYYY-MM-DD [as alias]`
+    - Cross-section:  `import db/VAR_NAME [YYYY-MM-DD] [as alias]`
+    - Event:          `import db/VAR_NAME YYYY-MM-DD to YYYY-MM-DD [as alias]`
+  (Replace `db` with whichever alias you set in `require ... as <alias>`.)
 - Variable transformations: `generate <name> = <expression>`,
   `replace <name> = <expr> [if <cond>]`, `recode ...`.
 - Analysis: `summarize`, `tabulate`, `correlate`, `regress`, `logit`,
@@ -57,10 +59,90 @@ GRAMMAR_CHEATSHEET = """\
 - Filter: `keep if <cond>`, `drop if <cond>`.
 - Loops: `for i in (a b c) { ... } end` or `for-each x in a b c { body }`.
 
-Import aliases are recommended (`import fd/INNTEKT_WLONN as inntekt`) — use
+Import aliases are recommended (`import db/INNTEKT_WLONN as inntekt`) — use
 the alias for every downstream reference, but the raw UPPER_CASE name is
 what is validated against the variable catalog.
 """
+
+
+DATABANK_CHEATSHEET = """\
+## Databank setup
+
+Every script needs ONE `require` line up top, before any imports. Use the
+short alias you choose (`as <alias>`) as the prefix in subsequent imports.
+
+| Databank | `require` line | Conventional alias | Used for |
+|---|---|---|---|
+| SSB FDB | `require no.ssb.fdb:N as db` | `db` | All SSB register data (income, demographics, education, geography). N is the version (typical: 30+). |
+| FHI NPR (hospital registry) | `require no.fhi.npr:DRAFT as fnpr` | `fnpr` | Norwegian Patient Registry — hospital admissions. |
+
+**Imports use the alias as prefix:** `import db/BEFOLKNING_KJOENN as kjonn`.
+
+**Variable temporality** (from the catalog metadata) tells you whether to
+add a date to the import:
+- `Fast` (Fixed) — no date. `import db/BEFOLKNING_KJOENN as kjonn`
+- `Tverrsnitt` / `Akkumulert` / `Forløp` (Time-Varying) — needs a date.
+  `import db/INNTEKT_WLONN 2022-01-01 as innt22`
+- `Event` — needs a date range. `import db/UTDANNING_FULLFOERT 2020-01-01 to 2023-12-31 as utd`
+
+If you import a Time-Varying variable without a date, the script will fail.
+"""
+
+
+PRIVACY_RULES = """\
+## Privacy guardrails (microdata.no enforces these)
+
+- **Never use:** `list`, `browse`, `print`, `head`, `tail`, `show`. These
+  would expose individual rows and the platform forbids them.
+- `tabulate` automatically hides cells where the count would identify
+  individuals (the platform suppresses output if more than ~50% of cells
+  have count < 5). Prefer aggregation over enumeration.
+- For continuous variables, use `summarize` (returns mean/sd/quantiles, not
+  individual values).
+"""
+
+
+DATE_QUIRKS = """\
+## Date format quirks
+
+- Many SSB date variables are stored as **integers**, not ISO date strings:
+    - `BEFOLKNING_FOEDSELS_AAR_MND` is `YYYYMM` (e.g. `198403` = March 1984)
+    - Some others are `YYYYMMDD` (e.g. `20220115`)
+- Extract the year with `gen year = int(date_var/10000)` (for YYYYMMDD)
+  or `gen year = int(date_var/100)` (for YYYYMM).
+- NPR (`fnpr/`) date variables (e.g. `INNDATO`) are integers — days since
+  1970-01-01.
+- Catalog metadata `data_type` tells you the format: `date:yyyymm`,
+  `date:yyyymmdd`, or `int` (with description noting the convention).
+"""
+
+
+def build_top_variables_block() -> str:
+    """Render the auto-derived top-N most-used variables list."""
+    corpus = retrieval.get_corpus()
+    rows = corpus.get("top_variables") or []
+    if not rows:
+        return ""
+    lines = [
+        "## Common variables (high-frequency — prefer these without lookup)",
+        "",
+        "These are the variables most often used in existing microdata.no scripts.",
+        "Use them directly without calling the `lookup_variable` tool unless the",
+        "user clearly asks for something not covered here.",
+        "",
+    ]
+    for v in rows:
+        temp = v.get("temporalitet", "")
+        date_hint = ""
+        if temp in ("Tverrsnitt", "Akkumulert", "Forløp"):
+            date_hint = "  *(needs date)*"
+        elif temp == "Event":
+            date_hint = "  *(needs date range)*"
+        lines.append(
+            f"- `{v['name']}` — {v.get('short_title','')} "
+            f"`[{v.get('data_type','')}, {temp}, {v.get('enhetstype','')}]`{date_hint}"
+        )
+    return "\n".join(lines)
 
 
 REPAIR_INSTRUCTION = """\
@@ -142,11 +224,18 @@ def cached_prefix() -> str:
     global _cached_prefix
     if _cached_prefix is None:
         _cached_prefix = "\n\n".join(
-            [
-                GRAMMAR_CHEATSHEET,
-                build_commands_reference(),
-                build_canonical_examples(),
-            ]
+            filter(
+                None,
+                [
+                    GRAMMAR_CHEATSHEET,
+                    DATABANK_CHEATSHEET,
+                    DATE_QUIRKS,
+                    PRIVACY_RULES,
+                    build_top_variables_block(),
+                    build_commands_reference(),
+                    build_canonical_examples(),
+                ],
+            )
         )
     return _cached_prefix
 

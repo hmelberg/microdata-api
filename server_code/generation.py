@@ -89,12 +89,57 @@ def _parse_json_response(text: str) -> dict | None:
         return None
 
 
+import re as _re
+
+_JSON_OBJ_RE = _re.compile(r"\{(?:[^{}]|(?:\{[^{}]*\}))*\}", _re.DOTALL)
+
+
+def _recover_partial_json(raw: str) -> dict | None:
+    """Last-ditch JSON recovery from raw model output that didn't parse
+    cleanly (e.g. extra prose, partial markdown). Finds the largest JSON
+    object literal in the text and tries to load it. Returns None if
+    nothing survives.
+    """
+    if not raw:
+        return None
+    candidates = _JSON_OBJ_RE.findall(raw)
+    if not candidates:
+        return None
+    # Try largest first — most likely to be the intended payload.
+    candidates.sort(key=len, reverse=True)
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    return None
+
+
+def _extract_script_from_raw(raw: str) -> str:
+    """If the model wrote a fenced code block but the wrapper JSON is
+    malformed, salvage the script body so the user gets *something*.
+    """
+    if not raw:
+        return ""
+    # Look for ```microdata ... ``` fence
+    m = _re.search(r"```(?:microdata)?\s*\n(.*?)```", raw, _re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Look for any fenced block
+    m = _re.search(r"```\s*\n(.*?)```", raw, _re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
 def _run_tool_loop(
     client: Anthropic,
     model: str,
     system: str,
     messages: list[dict],
-    max_tool_turns: int = 10,
+    max_tool_turns: int = 15,
 ) -> tuple[dict | None, dict, str]:
     """Return (parsed_json, usage, raw_text)."""
     for _ in range(max_tool_turns):
@@ -192,61 +237,114 @@ def generate_script(
             ),
         }
     ]
-    parsed, usage, _raw = _run_tool_loop(
+    parsed, usage, raw = _run_tool_loop(
         client, DEFAULT_MODEL, prompts.SYSTEM_PROMPT, messages
     )
 
+    # Recovery for empty/non-JSON model output: try partial JSON extraction,
+    # then fall back to salvaging any fenced code block as the script body.
+    recovery_note = ""
     if parsed is None:
-        return {
-            "script": "",
-            "rationale": "Model did not return valid JSON.",
-            "variables_used": [],
-            "commands_used": [],
-            "validation": {"passed": False, "tier_ran": "static", "errors": [
-                {"kind": "parse", "message": "Empty or non-JSON model response."}
-            ]},
-            "model": DEFAULT_MODEL,
-            "cache_stats": usage,
-        }
+        parsed = _recover_partial_json(raw)
+        if parsed is not None:
+            recovery_note = "Output was partially malformed; recovered via JSON extraction."
+        else:
+            salvaged = _extract_script_from_raw(raw)
+            if salvaged:
+                parsed = {
+                    "script": salvaged,
+                    "rationale": "Output was unstructured; salvaged code block as script.",
+                    "variables_used": [],
+                    "commands_used": [],
+                }
+                recovery_note = "Output had no JSON; salvaged a fenced code block."
+            else:
+                # Truly nothing usable. Return raw text as rationale so user sees something.
+                return {
+                    "script": "",
+                    "rationale": ("Modellen returnerte ikke et brukbart svar. Rå-output:\n\n"
+                                  + (raw or "(tomt)")[:1500]),
+                    "variables_used": [],
+                    "commands_used": [],
+                    "validation": {"passed": False, "tier_ran": "static", "errors": [
+                        {"kind": "parse", "message": "No script could be recovered from model output."}
+                    ]},
+                    "model": DEFAULT_MODEL,
+                    "cache_stats": usage,
+                }
 
     script = parsed.get("script", "") or ""
     vr = validation.validate_static(script)
 
-    # Repair loop.
+    # Track best-so-far across repair attempts so a worse repair doesn't
+    # discard a better earlier draft.
+    best = {
+        "parsed": parsed,
+        "script": script,
+        "vr": vr,
+        "model": DEFAULT_MODEL,
+    }
+
+    def _is_better(new_vr, old_vr) -> bool:
+        # Fewer errors → better. If counts equal, prefer the one with no
+        # unknown_variable / unknown_command (only soft errors).
+        if len(new_vr.errors) < len(old_vr.errors):
+            return True
+        if len(new_vr.errors) > len(old_vr.errors):
+            return False
+        soft_kinds = {"parse", "runtime"}
+        new_hard = sum(1 for e in new_vr.errors if e.kind not in soft_kinds)
+        old_hard = sum(1 for e in old_vr.errors if e.kind not in soft_kinds)
+        return new_hard < old_hard
+
     attempts = 0
     current_model = DEFAULT_MODEL
-    while not vr.passed and attempts < max_repair:
+    while not best["vr"].passed and attempts < max_repair:
         attempts += 1
         if attempts == 2:
             current_model = REPAIR_MODEL
-        messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+        messages.append({"role": "assistant", "content": json.dumps(best["parsed"], ensure_ascii=False)})
         messages.append(
             {
                 "role": "user",
                 "content": (
                     prompts.REPAIR_INSTRUCTION
                     + "\n\nErrors:\n"
-                    + json.dumps([e.__dict__ for e in vr.errors], ensure_ascii=False)
+                    + json.dumps([e.__dict__ for e in best["vr"].errors], ensure_ascii=False)
                     + "\n\n"
                     + prompts.GENERATE_OUTPUT_CONTRACT
                 ),
             }
         )
-        parsed, usage, _raw = _run_tool_loop(
+        new_parsed, usage, new_raw = _run_tool_loop(
             client, current_model, prompts.SYSTEM_PROMPT, messages
         )
-        if parsed is None:
-            break
-        script = parsed.get("script", "") or ""
-        vr = validation.validate_static(script)
+        if new_parsed is None:
+            new_parsed = _recover_partial_json(new_raw)
+            if new_parsed is None:
+                # Repair attempt produced nothing usable — keep best, stop.
+                break
+        new_script = new_parsed.get("script", "") or ""
+        new_vr = validation.validate_static(new_script)
+        if _is_better(new_vr, best["vr"]):
+            best = {
+                "parsed": new_parsed,
+                "script": new_script,
+                "vr": new_vr,
+                "model": current_model,
+            }
+
+    final_rationale = (best["parsed"] or {}).get("rationale", "")
+    if recovery_note:
+        final_rationale = (recovery_note + " " + final_rationale).strip()
 
     return {
-        "script": script,
-        "rationale": (parsed or {}).get("rationale", ""),
-        "variables_used": (parsed or {}).get("variables_used", []) or vr.variables_used,
-        "commands_used": (parsed or {}).get("commands_used", []) or vr.commands_used,
-        "validation": vr.to_dict(),
-        "model": current_model,
+        "script": best["script"],
+        "rationale": final_rationale,
+        "variables_used": (best["parsed"] or {}).get("variables_used", []) or best["vr"].variables_used,
+        "commands_used": (best["parsed"] or {}).get("commands_used", []) or best["vr"].commands_used,
+        "validation": best["vr"].to_dict(),
+        "model": best["model"],
         "repair_attempts": attempts,
         "cache_stats": usage,
     }
@@ -326,63 +424,110 @@ def revise_script(
             ),
         }
     ]
-    parsed, usage, _raw = _run_tool_loop(
+    parsed, usage, raw = _run_tool_loop(
         client, DEFAULT_MODEL, prompts.SYSTEM_PROMPT, messages
     )
 
+    recovery_note = ""
     if parsed is None:
-        return {
-            "script": script,
-            "rationale": "Model did not return valid JSON; revision not applied.",
-            "variables_used": existing_vars,
-            "commands_used": [],
-            "validation": {
-                "passed": False,
-                "tier_ran": "static",
-                "errors": [{"kind": "parse", "message": "Empty or non-JSON model response."}],
-            },
-            "model": DEFAULT_MODEL,
-            "cache_stats": usage,
-            "revision_applied": False,
-        }
+        parsed = _recover_partial_json(raw)
+        if parsed is not None:
+            recovery_note = "Output was partially malformed; recovered via JSON extraction."
+        else:
+            salvaged = _extract_script_from_raw(raw)
+            if salvaged:
+                parsed = {
+                    "script": salvaged,
+                    "rationale": "Output was unstructured; salvaged code block as revised script.",
+                    "variables_used": existing_vars,
+                    "commands_used": [],
+                }
+                recovery_note = "Output had no JSON; salvaged a fenced code block."
+            else:
+                # Keep the original script — at least the user doesn't lose it.
+                return {
+                    "script": script,
+                    "rationale": ("Modellen returnerte ikke et brukbart svar — beholder originalt skript. Rå-output:\n\n"
+                                  + (raw or "(tomt)")[:1500]),
+                    "variables_used": existing_vars,
+                    "commands_used": [],
+                    "validation": {
+                        "passed": False,
+                        "tier_ran": "static",
+                        "errors": [{"kind": "parse", "message": "No revision could be recovered from model output."}],
+                    },
+                    "model": DEFAULT_MODEL,
+                    "cache_stats": usage,
+                    "revision_applied": False,
+                }
 
     new_script = parsed.get("script", "") or ""
     vr = validation.validate_static(new_script)
 
+    best = {
+        "parsed": parsed,
+        "script": new_script,
+        "vr": vr,
+        "model": DEFAULT_MODEL,
+    }
+
+    def _is_better(new_vr, old_vr) -> bool:
+        if len(new_vr.errors) < len(old_vr.errors):
+            return True
+        if len(new_vr.errors) > len(old_vr.errors):
+            return False
+        soft_kinds = {"parse", "runtime"}
+        new_hard = sum(1 for e in new_vr.errors if e.kind not in soft_kinds)
+        old_hard = sum(1 for e in old_vr.errors if e.kind not in soft_kinds)
+        return new_hard < old_hard
+
     attempts = 0
     current_model = DEFAULT_MODEL
-    while not vr.passed and attempts < max_repair:
+    while not best["vr"].passed and attempts < max_repair:
         attempts += 1
         if attempts == 2:
             current_model = REPAIR_MODEL
-        messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+        messages.append({"role": "assistant", "content": json.dumps(best["parsed"], ensure_ascii=False)})
         messages.append(
             {
                 "role": "user",
                 "content": (
                     prompts.REPAIR_INSTRUCTION
                     + "\n\nErrors:\n"
-                    + json.dumps([e.__dict__ for e in vr.errors], ensure_ascii=False)
+                    + json.dumps([e.__dict__ for e in best["vr"].errors], ensure_ascii=False)
                     + "\n\n"
                     + prompts.GENERATE_OUTPUT_CONTRACT
                 ),
             }
         )
-        parsed, usage, _raw = _run_tool_loop(
+        new_parsed, usage, new_raw = _run_tool_loop(
             client, current_model, prompts.SYSTEM_PROMPT, messages
         )
-        if parsed is None:
-            break
-        new_script = parsed.get("script", "") or ""
-        vr = validation.validate_static(new_script)
+        if new_parsed is None:
+            new_parsed = _recover_partial_json(new_raw)
+            if new_parsed is None:
+                break
+        new_script_attempt = new_parsed.get("script", "") or ""
+        new_vr = validation.validate_static(new_script_attempt)
+        if _is_better(new_vr, best["vr"]):
+            best = {
+                "parsed": new_parsed,
+                "script": new_script_attempt,
+                "vr": new_vr,
+                "model": current_model,
+            }
+
+    final_rationale = (best["parsed"] or {}).get("rationale", "")
+    if recovery_note:
+        final_rationale = (recovery_note + " " + final_rationale).strip()
 
     return {
-        "script": new_script,
-        "rationale": (parsed or {}).get("rationale", ""),
-        "variables_used": (parsed or {}).get("variables_used", []) or vr.variables_used,
-        "commands_used": (parsed or {}).get("commands_used", []) or vr.commands_used,
-        "validation": vr.to_dict(),
-        "model": current_model,
+        "script": best["script"],
+        "rationale": final_rationale,
+        "variables_used": (best["parsed"] or {}).get("variables_used", []) or best["vr"].variables_used,
+        "commands_used": (best["parsed"] or {}).get("commands_used", []) or best["vr"].commands_used,
+        "validation": best["vr"].to_dict(),
+        "model": best["model"],
         "repair_attempts": attempts,
         "cache_stats": usage,
         "revision_applied": True,
@@ -390,7 +535,7 @@ def revise_script(
 
 
 @anvil.server.background_task
-def bg_smart_query(question, lang="no", max_repair=1, deep_validate=False):
+def bg_smart_query(question, lang="no", max_repair=2, deep_validate=False):
     """Background-task wrapper around smart_query.
 
     Used by /query for script_gen intent so that long generations are not
