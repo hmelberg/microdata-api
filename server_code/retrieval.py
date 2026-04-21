@@ -138,6 +138,7 @@ def reload_data_files() -> dict:
         "commands": len(_command_names),
         "synonyms": len(_synonyms_cache),
         "top_variables": len((_corpus or {}).get("top_variables") or []),
+        "entity_links": len((_corpus or {}).get("entity_links") or []),
         "schema_version": (_corpus or {}).get("schema_version", 1),
     }
 
