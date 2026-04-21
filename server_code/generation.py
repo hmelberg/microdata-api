@@ -420,8 +420,10 @@ def smart_query(
     }
 
     if intent == "script_gen":
+        # /query path: force max_repair=0 so we stay under Anvil's 30s
+        # execution cap. Callers who want repair can hit /generate directly.
         envelope["result"] = generate_script(
-            question=question, lang=resolved_lang, max_repair=max_repair
+            question=question, lang=resolved_lang, max_repair=0
         )
         if deep_validate and envelope["result"].get("script"):
             deep = validation.validate_dry_run(envelope["result"]["script"])
