@@ -120,20 +120,28 @@ DATE_QUIRKS = """\
 NPR_CANONICAL_IMPORTS = """\
 ## NPR (Norsk Pasientregister) canonical imports
 
-NPR is event-level data: one row per hospital admission (`Behandlingsopphold`).
-A Person can have many admissions. **The first import in a dataset establishes
-the dataset's unit type** — so for NPR you MUST import the event-level variable
-`AGGRSHOPPID` first. Then `NPRID` and the other per-event attributes flow in
-as columns on event rows. Do NOT use `import-event`; regular `import` works as
-long as the order is correct.
+NPR data is fundamentally event-level (one row per hospital admission), with
+multiple events per person. The microdata.no platform knows this from the
+source metadata, so:
 
-Recommended imports and aliases (match the convention used by existing users):
+- **Import `NPRID` (the person id) first**, then per-event attributes
+  (diagnoses, dates, level). This is the common, working pattern.
+- **Do NOT also import `AGGRSHOPPID`** in the same dataset. It has a
+  different `enhetstype` (`Behandlingsopphold`) than `NPRID` (`Person`), and
+  mixing them in one dataset triggers a `unit_id` error. AGGRSHOPPID is
+  rarely needed; the dataset's implicit event identifier suffices for most
+  analyses.
+- For **collapse**, omit `by()` to default-group by the person id. The
+  platform knows NPRID is the person variable and uses it as the default
+  groupby. So `collapse (count) icd1 -> n_dx` gives one row per person with
+  the diagnosis count — no explicit `by(NPRID)` required.
+
+Recommended imports and aliases:
 
 ```microdata
 require no.fhi.npr:DRAFT as fnpr
 create-dataset npr_data
-import fnpr/AGGRSHOPPID as event_id       // FIRST: establishes dataset as event-level
-import fnpr/NPRID as pid                  // person id — link key to SSB
+import fnpr/NPRID as pid                  // person id (also the cross-registry link key to SSB)
 import fnpr/HOVEDTILSTAND1 as icd1        // main ICD-10 diagnosis
 import fnpr/HOVEDTILSTAND2 as icd2        // secondary diagnosis (optional)
 import fnpr/INNDATO as in_date            // admission date (int: days since 1970-01-01)
@@ -142,15 +150,9 @@ import fnpr/INNTID as in_time             // admission time (optional)
 import fnpr/UTTID as out_time             // discharge time (optional)
 import fnpr/OMSORGSNIVA as level          // inpatient / outpatient / day-visit
 import fnpr/NIVA as isf_level             // ISF funding level
+// Skip AGGRSHOPPID unless you specifically need a unique event identifier;
+// in that case put it in a separate dataset to avoid the unit_id mismatch.
 ```
-
-**Always import `NPRID`** when working with NPR data — it's the person key
-that joins to all other datasets (same encrypted PID).
-
-**For collapse, group by `NPRID` (the person ref) by default**, e.g.
-`collapse (count) AGGRSHOPPID -> n_admissions, by(NPRID)` for admissions per
-person. Switch the groupby only if the user clearly asks for a different
-aggregation level.
 """
 
 
