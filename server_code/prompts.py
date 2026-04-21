@@ -58,6 +58,10 @@ GRAMMAR_CHEATSHEET = """\
 - Aggregation: `collapse (stat) var -> new_name [, by(...)]`.
 - Filter: `keep if <cond>`, `drop if <cond>`.
 - Loops: `for i in (a b c) { ... } end` or `for-each x in a b c { body }`.
+- **Missing values**: use `sysmiss(x)` (returns 1 if x is system-missing,
+  else 0) — NOT `x == .` (Stata syntax, not supported). Negate with
+  `!sysmiss(x)`. Examples: `drop if sysmiss(income)`,
+  `replace flag = 0 if sysmiss(flag)`.
 
 Import aliases are recommended (`import db/INNTEKT_WLONN as inntekt`) — use
 the alias for every downstream reference, but the raw UPPER_CASE name is
@@ -192,7 +196,7 @@ clearer to always pass `on <alias>` explicitly.
 use npr_astma
 merge astma into personer on pid
 use personer
-replace astma = 0 if astma == .   // unmatched persons → no admission
+replace astma = 0 if sysmiss(astma)   // unmatched persons → no admission
 ```
 """
 
