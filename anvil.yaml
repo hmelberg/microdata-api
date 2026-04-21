@@ -50,7 +50,7 @@ secrets:
     value: {UAYNGOMA6Z4REMAB: kQXjGd5BI7JXhJFYVBRdD4tkWgr3g7C0Itr0PZVlDSp4SRezpO3jHR/O4miW2BePGobbgkYqpIhnejBid0zrOVXot/ERu8yiR/BETYkMf/bUX5cOdkOrDsu97rE8nIUHyKhz}
   API_KEY_hans:
     type: secret
-    value: {UAYNGOMA6Z4REMAB: /lDvN4vYII0Eh+tqm1RTepG6ixuBm9bqP6uUYQmDOAtdrF5+2wHGXYFq2tK7ypdevbqugl541B82ETFHs2FanlBNJXGxRkBKP2z5yQvehbNAlqMLFVrVrKP29+d+V3srOSXLusjlEa6sBJNeS1NgF5FW6N9kuJkJXJzvFP079eq5QHqXlZ4rMg==}
+    value: {UAYNGOMA6Z4REMAB: rocvdZU7RsxSmZgo+kqFI5lhUhiUvr2s0CR3KMzD2ypQuRlw4wU3BqyFM37d1/pT2rrESNgr8z5cILjzoAnhJDfo+dMRHJdBEd451yHoTu6JmpqY+T+pVyBCOmH92Zz6m1TJULhyBe6ztrxCFRtWol0nzBBe4xtd}
 services:
 - client_config: {enable_v2: true}
   server_config: {auto_create_missing_columns: true}
