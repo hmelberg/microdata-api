@@ -57,7 +57,7 @@ def _authenticate_or_fail():
 # /query  (smart router: classifies intent, dispatches to the matching mode)
 
 
-@anvil.server.http_endpoint("/query", methods=["POST"], cross_site_session=False)
+@anvil.server.http_endpoint("/query", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_query():
     alias, err = _authenticate_or_fail()
     if err:
@@ -119,7 +119,7 @@ def http_query():
 # /generate
 
 
-@anvil.server.http_endpoint("/generate", methods=["POST"], cross_site_session=False)
+@anvil.server.http_endpoint("/generate", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_generate():
     alias, err = _authenticate_or_fail()
     if err:
@@ -166,7 +166,7 @@ def http_generate():
 # /revise
 
 
-@anvil.server.http_endpoint("/revise", methods=["POST"], cross_site_session=False)
+@anvil.server.http_endpoint("/revise", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_revise():
     alias, err = _authenticate_or_fail()
     if err:
@@ -216,7 +216,7 @@ def http_revise():
 # /ask
 
 
-@anvil.server.http_endpoint("/ask", methods=["POST"], cross_site_session=False)
+@anvil.server.http_endpoint("/ask", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_ask():
     alias, err = _authenticate_or_fail()
     if err:
@@ -248,7 +248,7 @@ def http_ask():
 # /validate
 
 
-@anvil.server.http_endpoint("/validate", methods=["POST"], cross_site_session=False)
+@anvil.server.http_endpoint("/validate", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_validate():
     alias, err = _authenticate_or_fail()
     if err:
@@ -288,7 +288,7 @@ def http_validate():
 # /variables/search
 
 
-@anvil.server.http_endpoint("/variables/search", methods=["GET"], cross_site_session=False)
+@anvil.server.http_endpoint("/variables/search", methods=["GET"], cross_site_session=False, enable_cors=True)
 def http_variables_search(**kwargs):
     # Anvil passes GET query-string params as function kwargs.
     alias, err = _authenticate_or_fail()
