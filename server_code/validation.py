@@ -24,7 +24,7 @@ import retrieval
 
 
 _IMPORT_RE = re.compile(
-    r"^\s*import\s+[\w/]+/?([A-Z][A-Z0-9_]*)(?:\s+\d{4}-\d{2}-\d{2}(?:\s+to\s+\d{4}-\d{2}-\d{2})?)?(?:\s+as\s+(\S+))?",
+    r"^\s*import\s+(?:\w+/)*([A-Z][A-Z0-9_]+)(?:\s+\d{4}-\d{2}-\d{2}(?:\s+to\s+\d{4}-\d{2}-\d{2})?)?(?:\s+as\s+(\S+))?",
     re.MULTILINE,
 )
 
