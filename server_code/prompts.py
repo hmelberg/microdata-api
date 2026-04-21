@@ -117,6 +117,79 @@ DATE_QUIRKS = """\
 """
 
 
+NPR_CANONICAL_IMPORTS = """\
+## NPR (Norsk Pasientregister) canonical imports
+
+When working with NPR data, these are the recommended imports and aliases
+(match the convention used by existing users of the platform):
+
+```microdata
+require no.fhi.npr:DRAFT as fnpr
+create-dataset npr_data
+import fnpr/NPRID as pid                  // person id — link key to SSB
+import fnpr/AGGRSHOPPID as event_id       // unique event id
+import fnpr/HOVEDTILSTAND1 as icd1        // main ICD-10 diagnosis
+import fnpr/HOVEDTILSTAND2 as icd2        // secondary diagnosis (optional)
+import fnpr/INNDATO as in_date            // admission date (int: days since 1970-01-01)
+import fnpr/UTDATO as out_date            // discharge date
+import fnpr/INNTID as in_time             // admission time (optional)
+import fnpr/UTTID as out_time             // discharge time (optional)
+import fnpr/OMSORGSNIVA as level          // inpatient / outpatient / day-visit
+import fnpr/NIVA as isf_level             // ISF funding level
+```
+
+**Always import `NPRID`** when working with NPR data — it's the person key
+that joins to all other datasets (same encrypted PID).
+"""
+
+
+def build_entity_links_block() -> str:
+    """Render the auto-derived entity→person-ref mapping + conventions.
+
+    Derived from m2py.py's _ENTITY_PERSON_REF_COL at seed time. Content:
+    a table of entity-types that store multi-record-per-person data, and
+    the column each uses to link back to the person.
+    """
+    corpus = retrieval.get_corpus()
+    links = corpus.get("entity_links") or []
+    if not links:
+        return ""
+    lines = [
+        "## Cross-dataset entity linking",
+        "",
+        "Several microdata.no datasets hold events or items that belong to a person"
+        " (one person has many rows). Each uses a specific column to link back to"
+        " the person. The table below lists those person-ref columns.",
+        "",
+        "| Entity type | Person-ref column | Databank | Notes |",
+        "|---|---|---|---|",
+    ]
+    for e in links:
+        ent = e.get("entity", "")
+        pref = e.get("person_ref", "")
+        bank = e.get("databank", "")
+        ehtp = e.get("enhetstype", "")
+        title = e.get("short_title", "")
+        lines.append(f"| `{ent}` | `{pref}` | `{bank}` | {ehtp} — {title} |")
+    lines.extend([
+        "",
+        "**Three conventions to follow:**",
+        "",
+        "1. **Always include the person-ref column** when importing variables from"
+        " one of these entity types. Without it you can't link events back to the"
+        " person or join to other datasets.",
+        "2. **To aggregate events → person-level**, group by the person-ref column:"
+        " `collapse (count) <any_event_var>, by(<person_ref>)`. E.g. for NPR:"
+        " `collapse (count) AGGRSHOPPID, by(NPRID)` gives number of hospital"
+        " admissions per person.",
+        "3. **The person-ref column is the cross-dataset join key.** `NPRID` on"
+        " NPR data matches the implicit person id on SSB person-level variables"
+        " (same encrypted PID across registries). Once you have both a person-ref"
+        " column and a SSB person variable in the same dataset, rows line up.",
+    ])
+    return "\n".join(lines)
+
+
 def build_top_variables_block() -> str:
     """Render the auto-derived top-N most-used variables list."""
     corpus = retrieval.get_corpus()
@@ -229,6 +302,8 @@ def cached_prefix() -> str:
                 [
                     GRAMMAR_CHEATSHEET,
                     DATABANK_CHEATSHEET,
+                    build_entity_links_block(),
+                    NPR_CANONICAL_IMPORTS,
                     DATE_QUIRKS,
                     PRIVACY_RULES,
                     build_top_variables_block(),
