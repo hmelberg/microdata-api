@@ -120,14 +120,25 @@ def _ensure_loaded() -> None:
 
 @anvil.server.callable
 def reload_data_files() -> dict:
-    """Re-read corpus.pkl + synonyms.json after a fresh upload."""
+    """Re-read corpus.pkl + synonyms.json after a fresh upload.
+
+    Bust the cached prompt prefix so any new content (top_variables,
+    cheat sheets) takes effect on the next request.
+    """
     _load_corpus()
+    try:
+        import prompts
+        prompts.refresh_cached_prefix()
+    except Exception:
+        pass
     return {
         "variables": len(_variables_index.docs),
         "examples": len(_examples_index.docs),
         "manual_sections": len(_manual_index.docs),
         "commands": len(_command_names),
         "synonyms": len(_synonyms_cache),
+        "top_variables": len((_corpus or {}).get("top_variables") or []),
+        "schema_version": (_corpus or {}).get("schema_version", 1),
     }
 
 
