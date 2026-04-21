@@ -23,8 +23,13 @@ def _all_api_keys() -> dict[str, str]:
     out: dict[str, str] = {}
     # Anvil has no enumerate-secrets API, so we follow a naming convention
     # and look up a fixed list (edit here when you add a new key alias).
-    known_aliases = (anvil.secrets.get_secret("API_KEY_ALIASES") or "").split(",")
-    for alias in known_aliases:
+    try:
+        aliases_str = anvil.secrets.get_secret("API_KEY_ALIASES") or ""
+    except Exception:
+        # If the alias-list secret is missing, downgrade to "no keys configured"
+        # so the request gets a clean 401 rather than a 500.
+        return out
+    for alias in aliases_str.split(","):
         alias = alias.strip()
         if not alias:
             continue
@@ -60,17 +65,32 @@ def authenticate(request) -> Optional[str]:
 
 
 def check_rate_limit(alias: str) -> bool:
-    """Return True if the call is allowed, False if it is over the limit."""
+    """Return True if the call is allowed, False if it is over the limit.
+
+    Defensive: a freshly-created `api_usage` table has no columns until the
+    first add_row(); a get() against missing columns raises. We treat any
+    failure as "no row yet" and try add_row, then default to True so that
+    rate-limit accounting never 500s a real request.
+    """
     window_start = dt.datetime.utcnow().replace(second=0, microsecond=0)
-    row = app_tables.api_usage.get(key_alias=alias, window_start=window_start)
+    try:
+        row = app_tables.api_usage.get(key_alias=alias, window_start=window_start)
+    except Exception:
+        row = None
     if row is None:
-        app_tables.api_usage.add_row(
-            key_alias=alias, window_start=window_start, count=1
-        )
+        try:
+            app_tables.api_usage.add_row(
+                key_alias=alias, window_start=window_start, count=1
+            )
+        except Exception:
+            pass
         return True
-    count = (row["count"] or 0) + 1
-    row["count"] = count
-    return count <= RATE_LIMIT_MAX_CALLS
+    try:
+        count = (row["count"] or 0) + 1
+        row["count"] = count
+        return count <= RATE_LIMIT_MAX_CALLS
+    except Exception:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -94,21 +114,26 @@ def log_request(
     api_key_alias: str = "",
 ) -> str:
     request_id = uuid.uuid4().hex
-    app_tables.eval_runs.add_row(
-        ts=dt.datetime.utcnow(),
-        request_id=request_id,
-        endpoint=endpoint,
-        question=question,
-        lang=lang,
-        model=model,
-        script=script,
-        variables_used=variables_used or [],
-        commands_used=commands_used or [],
-        validation_passed=validation_passed,
-        validation_tier=validation_tier,
-        errors=errors or [],
-        latency_ms=latency_ms,
-        cache_stats=cache_stats or {},
-        api_key_alias=api_key_alias,
-    )
+    try:
+        app_tables.eval_runs.add_row(
+            ts=dt.datetime.utcnow(),
+            request_id=request_id,
+            endpoint=endpoint,
+            question=question,
+            lang=lang,
+            model=model,
+            script=script,
+            variables_used=variables_used or [],
+            commands_used=commands_used or [],
+            validation_passed=validation_passed,
+            validation_tier=validation_tier,
+            errors=errors or [],
+            latency_ms=latency_ms,
+            cache_stats=cache_stats or {},
+            api_key_alias=api_key_alias,
+        )
+    except Exception:
+        # Best-effort logging — never fail the user request because the
+        # log row couldn't be written.
+        pass
     return request_id
