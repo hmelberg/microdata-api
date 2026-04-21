@@ -118,42 +118,39 @@ DATE_QUIRKS = """\
 
 
 NPR_CANONICAL_IMPORTS = """\
-## NPR (Norsk Pasientregister) — canonical imports
+## NPR (Norsk Pasientregister) canonical imports
 
-NPR is **event-organised** (one row per `Behandlingsopphold` / hospital
-episode). Almost every NPR variable has `temporalitet=Forløp`, which
-means they require **`import-event`** with a date range — NOT regular
-`import` (which is for cross-section variables only).
+NPR is event-level data: one row per hospital admission (`Behandlingsopphold`).
+A Person can have many admissions. **The first import in a dataset establishes
+the dataset's unit type** — so for NPR you MUST import the event-level variable
+`AGGRSHOPPID` first. Then `NPRID` and the other per-event attributes flow in
+as columns on event rows. Do NOT use `import-event`; regular `import` works as
+long as the order is correct.
 
-**Order matters:** import `AGGRSHOPPID` first to establish the dataset as
-episode-level. NPRID can then attach as a column linking each episode to
-its person.
+Recommended imports and aliases (match the convention used by existing users):
 
 ```microdata
 require no.fhi.npr:DRAFT as fnpr
 create-dataset npr_data
-
-// Event-level variables — use import-event with a date RANGE.
-// NPR data currently covers 2023-01-01 to 2023-12-31.
-import-event fnpr/AGGRSHOPPID 2023-01-01 to 2023-12-31 as event_id   // unique event id (import FIRST)
-import-event fnpr/NPRID 2023-01-01 to 2023-12-31 as pid              // person id — joins to SSB
-import-event fnpr/HOVEDTILSTAND1 2023-01-01 to 2023-12-31 as icd1    // main ICD-10 diagnosis
-import-event fnpr/HOVEDTILSTAND2 2023-01-01 to 2023-12-31 as icd2    // secondary diagnosis (optional)
-import-event fnpr/INNDATO 2023-01-01 to 2023-12-31 as in_date        // admission (int: days since 1970-01-01)
-import-event fnpr/UTDATO 2023-01-01 to 2023-12-31 as out_date        // discharge
-import-event fnpr/INNTID 2023-01-01 to 2023-12-31 as in_time         // admission time (optional)
-import-event fnpr/UTTID 2023-01-01 to 2023-12-31 as out_time         // discharge time
-import-event fnpr/OMSORGSNIVA 2023-01-01 to 2023-12-31 as level      // inpatient / outpatient / day-visit
-import-event fnpr/NIVA 2023-01-01 to 2023-12-31 as isf_level         // ISF funding level
+import fnpr/AGGRSHOPPID as event_id       // FIRST: establishes dataset as event-level
+import fnpr/NPRID as pid                  // person id — link key to SSB
+import fnpr/HOVEDTILSTAND1 as icd1        // main ICD-10 diagnosis
+import fnpr/HOVEDTILSTAND2 as icd2        // secondary diagnosis (optional)
+import fnpr/INNDATO as in_date            // admission date (int: days since 1970-01-01)
+import fnpr/UTDATO as out_date            // discharge date
+import fnpr/INNTID as in_time             // admission time (optional)
+import fnpr/UTTID as out_time             // discharge time (optional)
+import fnpr/OMSORGSNIVA as level          // inpatient / outpatient / day-visit
+import fnpr/NIVA as isf_level             // ISF funding level
 ```
 
-Three rules:
+**Always import `NPRID`** when working with NPR data — it's the person key
+that joins to all other datasets (same encrypted PID).
 
-1. **Use `import-event`** for NPR variables (date range required), not `import`.
-2. **Import `AGGRSHOPPID` first** so the dataset is episode-keyed before
-   other event variables attach as columns.
-3. **Always include `NPRID`** — it's the person key joining NPR to SSB
-   datasets (same encrypted PID across registries).
+**For collapse, group by `NPRID` (the person ref) by default**, e.g.
+`collapse (count) AGGRSHOPPID -> n_admissions, by(NPRID)` for admissions per
+person. Switch the groupby only if the user clearly asks for a different
+aggregation level.
 """
 
 
