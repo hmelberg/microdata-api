@@ -157,12 +157,21 @@ def _run_tool_loop(
     system: str,
     messages: list[dict],
     max_tool_turns: int = 15,
+    max_tokens: int = 8192,
 ) -> tuple[dict | None, dict, str]:
-    """Return (parsed_json, usage, raw_text)."""
+    """Return (parsed_json, usage, raw_text).
+
+    max_tokens=8192 covers complex scripts where the model reasons
+    through a 5-factor regression or a merge-heavy pipeline (several
+    hundred tokens of internal reasoning before emitting the final JSON
+    wrapping a ~1500-char script + rationale). Prior 2048 cap was
+    clipping the response mid-reason on exactly these cases, producing
+    empty-script failures at 100% useful_output rate loss.
+    """
     for _ in range(max_tool_turns):
         resp = client.messages.create(
             model=model,
-            max_tokens=2048,
+            max_tokens=max_tokens,
             system=system,
             tools=TOOLS,
             messages=messages,
