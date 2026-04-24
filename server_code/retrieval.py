@@ -244,20 +244,48 @@ def search_manual(query: str, lang: str = "no", k: int = 3) -> list[dict]:
 # Tool-use backend
 
 
+_LOOKUP_LABEL_CAP = 80
+
+
 @anvil.server.callable
 def lookup_variable(query: str, lang: str = "no", k: int = 8) -> list[dict]:
+    """Drill-down details for one or more variables.
+
+    With the full catalog in the cached prefix, the tool's primary purpose
+    is to fetch metadata the catalog doesn't carry: enum labels for
+    categorical variables, the codelist reference, available-years range,
+    databank, and the full long description. The query interface still
+    accepts fuzzy text (legacy search behavior) but the usual flow is for
+    the model to pass the exact UPPERCASE name of a known variable to
+    retrieve its details.
+
+    Labels are capped at `_LOOKUP_LABEL_CAP` entries per variable to keep
+    tool responses bounded; overflow is indicated by a `labels_truncated`
+    flag.
+    """
     hits = search_variables(query=query, lang=lang, k=k)
-    return [
-        {
+    out: list[dict] = []
+    for h in hits:
+        labels = h.get("labels") or {}
+        truncated = False
+        if isinstance(labels, dict) and len(labels) > _LOOKUP_LABEL_CAP:
+            labels = dict(list(labels.items())[:_LOOKUP_LABEL_CAP])
+            truncated = True
+        out.append({
             "name": h["name"],
             "short_title": h.get("short_title", ""),
             "description": h.get("description", ""),
             "data_type": h.get("data_type", ""),
             "temporalitet": h.get("temporalitet", ""),
             "enhetstype": h.get("enhetstype", ""),
-        }
-        for h in hits
-    ]
+            "databank": h.get("databank", ""),
+            "labels": labels,
+            "labels_truncated": truncated,
+            "codelist_ref": h.get("codelist_ref", ""),
+            "available_years_start": h.get("available_years_start"),
+            "available_years_end": h.get("available_years_end"),
+        })
+    return out
 
 
 @anvil.server.callable

@@ -27,12 +27,15 @@ Two modes:
 2. **qa** — the user wants an explanation. Answer concisely, in the user's
    language. Cite the manual section or command name you drew from.
 
-**Variable selection (script_gen):** the user's turn includes a ranked
-list of candidate variables already retrieved for you. Prefer these — the
-ranking is reliable. Only call the `lookup_variable` tool if NONE of the
-candidates fit the request, and even then make at most ONE call. Do not
-explore alternatives once you have an adequate variable. Latency budget
-is tight; tool sprawl will cause your response to be cut off.
+**Variable selection (script_gen):** the cached context above contains
+the FULL variable catalog (every variable in the platform). The user's
+turn additionally surfaces a ranked subset that looks relevant to the
+question — treat it as a hint, not a constraint. Any variable from the
+full catalog is valid. Call the `lookup_variable` tool only when you
+need details the catalog doesn't carry: enum labels for a categorical
+variable (value → meaning), the codelist reference, available-years
+range, or the full long description. Do not use it to search for a
+name — the catalog above is exhaustive. Never invent variable names.
 
 You must respond with a JSON object matching the contract shown in the
 user's turn. No extra prose outside the JSON.
@@ -255,11 +258,11 @@ def build_top_variables_block() -> str:
     if not rows:
         return ""
     lines = [
-        "## Common variables (high-frequency — prefer these without lookup)",
+        "## Common variables (high-frequency — start here for standard analyses)",
         "",
         "These are the variables most often used in existing microdata.no scripts.",
-        "Use them directly without calling the `lookup_variable` tool unless the",
-        "user clearly asks for something not covered here.",
+        "They're a subset of the full catalog below; use them as a starting point",
+        "when the question matches a common demographic/economic pattern.",
         "",
     ]
     for v in rows:
@@ -274,6 +277,78 @@ def build_top_variables_block() -> str:
             f"`[{v.get('data_type','')}, {temp}, {v.get('enhetstype','')}]`{date_hint}"
         )
     return "\n".join(lines)
+
+
+_DATABANK_ALIAS_HINT = {
+    "no.ssb.fdb": "db",
+    "no.fhi.npr": "fnpr",
+}
+
+
+def build_full_catalog_block() -> str:
+    """Render every variable in the catalog as a compact reference.
+
+    Grouped by databank, alphabetical within each group. Format per row:
+    `- NAME [data_type, temporalitet, enhetstype] — short_title`. At ~740
+    variables the block is ~17k tokens; combined with the rest of the
+    cached prefix it stays well under Sonnet's comfortable cache size.
+    Having every name visible at all times eliminates retrieval-recall
+    misses on the variable-name axis and lets the model pick correctly
+    without spending tool turns on `lookup_variable`.
+    """
+    corpus = retrieval.get_corpus()
+    variables = corpus.get("variables") or []
+    if not variables:
+        return ""
+    by_bank: dict[str, list[dict]] = {}
+    for v in variables:
+        bank = (v.get("databank") or "(unknown)").strip() or "(unknown)"
+        by_bank.setdefault(bank, []).append(v)
+    # SSB FDB first (the bulk), then alphabetical.
+    bank_order = sorted(
+        by_bank.keys(),
+        key=lambda b: (b != "no.ssb.fdb", b),
+    )
+
+    lines = [
+        "## Full variable catalog",
+        "",
+        "Every variable available in the microdata.no platform is listed below,",
+        "grouped by databank. The ranked candidates in each user turn are a",
+        "convenience hint; pick from anywhere in this catalog. Row format:",
+        "`NAME [data_type, temporalitet, enhetstype] — short_title`.",
+        "",
+        "Interpretation:",
+        "- `temporalitet = Fast` → import without a date.",
+        "- `temporalitet ∈ {Tverrsnitt, Akkumulert, Forløp}` → import with a date.",
+        "- `temporalitet = Event` → import with a date range.",
+        "- `enhetstype ≠ Person` → you must also import the corresponding",
+        "  person-ref column (see the cross-dataset entity-linking table above).",
+        "",
+    ]
+    for bank in bank_order:
+        alias = _DATABANK_ALIAS_HINT.get(bank)
+        header = f"### `{bank}`"
+        if alias:
+            header += f" — conventional alias `{alias}`"
+        lines.append(header)
+        lines.append("")
+        rows = sorted(by_bank[bank], key=lambda v: (v.get("name") or "").upper())
+        for v in rows:
+            name = v.get("name") or ""
+            dt = v.get("data_type") or ""
+            temp = v.get("temporalitet") or ""
+            ehtp = v.get("enhetstype") or ""
+            title = (v.get("short_title") or "").strip()
+            if len(title) > 110:
+                title = title[:107] + "..."
+            meta = f"[{dt}, {temp}, {ehtp}]"
+            if title:
+                lines.append(f"- `{name}` {meta} — {title}")
+            else:
+                lines.append(f"- `{name}` {meta}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 REPAIR_INSTRUCTION = """\
@@ -366,6 +441,7 @@ def cached_prefix() -> str:
                     DATE_QUIRKS,
                     PRIVACY_RULES,
                     build_top_variables_block(),
+                    build_full_catalog_block(),
                     build_commands_reference(),
                     build_canonical_examples(),
                 ],
