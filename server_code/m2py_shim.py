@@ -3,8 +3,8 @@
 m2py.py is shipped as a server module inside the Anvil app (copied from
 C:\\Users\\hansm\\m2py\\m2py.py). This shim exposes just the pieces the API
 needs, with lazy imports so that cold-start only pays for MicroParser.
-MockDataEngine and StatsEngine (which pull pandas/numpy) only load when
-deep_validate=True is requested.
+MicroInterpreter (which pulls pandas/numpy through MockDataEngine and
+StatsEngine) only loads when deep_validate=True is requested.
 
 In the Anvil app repository, place m2py.py at server_code/m2py.py next to
 this file so `import m2py` resolves inside server modules.
@@ -16,28 +16,25 @@ from __future__ import annotations
 from m2py import MicroParser  # type: ignore  # noqa: F401
 
 
-_mock_engine = None
-_stats_engine = None
+_interpreter_cls = None
 
 
-def get_mock_engine():
-    """Lazy-load MockDataEngine. Only called when deep_validate=True."""
-    global _mock_engine
-    if _mock_engine is None:
-        from m2py import MockDataEngine  # type: ignore
+def get_interpreter_cls():
+    """Lazy-load MicroInterpreter. Only called when deep_validate=True.
 
-        _mock_engine = MockDataEngine
-    return _mock_engine
+    MicroInterpreter is the full execution engine — it internally
+    constructs a MockDataEngine + StatsEngine + the handler suite and
+    exposes run_script(text) which preprocesses and executes every line
+    against synthetic data. That's what we use to catch runtime errors
+    (merge direction, entity-type mixing, missing date, etc.) the static
+    validator can't see.
+    """
+    global _interpreter_cls
+    if _interpreter_cls is None:
+        from m2py import MicroInterpreter  # type: ignore
 
-
-def get_stats_engine():
-    """Lazy-load StatsEngine. Only called when deep_validate=True."""
-    global _stats_engine
-    if _stats_engine is None:
-        from m2py import StatsEngine  # type: ignore
-
-        _stats_engine = StatsEngine
-    return _stats_engine
+        _interpreter_cls = MicroInterpreter
+    return _interpreter_cls
 
 
 def make_parser() -> MicroParser:

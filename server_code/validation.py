@@ -149,6 +149,9 @@ def validate_static(script: str) -> ValidationResult:
 # Dry-run validation
 
 
+_DRY_RUN_DEFAULT_ROWS = 200
+
+
 def validate_dry_run(script: str) -> ValidationResult:
     static = validate_static(script)
     if not static.passed:
@@ -156,19 +159,24 @@ def validate_dry_run(script: str) -> ValidationResult:
         return static
 
     try:
-        MockDataEngine = m2py_shim.get_mock_engine()
-        m2py_shim.get_stats_engine()
+        InterpreterCls = m2py_shim.get_interpreter_cls()
     except Exception as exc:
-        static.errors.append(
-            ValidationError(kind="runtime", message=f"Could not load MockDataEngine/StatsEngine: {exc}")
-        )
-        static.passed = False
-        static.tier_ran = "dry_run"
+        # Infrastructure problem, not a script problem — don't count this
+        # against the caller. Return the (passing) static result with a
+        # note so the repair loop doesn't chase a non-error.
+        static.tier_ran = "static (dry_run unavailable: " + str(exc)[:120] + ")"
         return static
 
     try:
-        engine = MockDataEngine(n_rows=50)
-        engine.run_script(script)  # type: ignore[attr-defined]
+        interp = InterpreterCls(echo_commands=False)
+        # Shrink the synthetic frame: dry-run only needs enough rows to
+        # exercise joins and group-bys, not realistic statistical power.
+        if hasattr(interp, "data_engine"):
+            try:
+                interp.data_engine.default_rows = _DRY_RUN_DEFAULT_ROWS
+            except Exception:
+                pass
+        interp.run_script(script)  # type: ignore[attr-defined]
     except Exception as exc:
         static.errors.append(ValidationError(kind="runtime", message=str(exc)))
         static.passed = False
