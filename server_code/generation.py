@@ -36,16 +36,18 @@ TOOLS = [
     {
         "name": "lookup_variable",
         "description": (
-            "Resolve a term or phrase to one or more microdata.no variables. "
-            "ONLY use this when the candidate list in the user turn does not "
-            "contain a variable that fits the request. The candidates are "
-            "already ranked by relevance — prefer them. Make at most one "
-            "tool call per request. Supports Norwegian and English queries."
+            "Drill into one or more microdata.no variables. Use ONLY to fetch "
+            "details the cached catalog above does not carry — specifically: "
+            "enum labels (code → meaning for categorical variables), codelist "
+            "reference, available-years range, or the full long description. "
+            "Do NOT use this to search for a name — every platform variable is "
+            "already listed in the catalog above. The typical usage is passing "
+            "the exact UPPERCASE name of a variable you already chose."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "A term, phrase, or variable name."},
+                "query": {"type": "string", "description": "The exact UPPERCASE name of a variable (preferred) or a term/phrase."},
                 "lang": {"type": "string", "enum": ["no", "en"], "default": "no"},
                 "k": {"type": "integer", "default": 8, "minimum": 1, "maximum": 20},
             },
@@ -134,6 +136,21 @@ def _extract_script_from_raw(raw: str) -> str:
     return ""
 
 
+def _validate(script: str, deep_validate: bool):
+    """Static by default, dry-run (MockDataEngine) when opt-in.
+
+    Putting this behind the repair loop means runtime errors from a mock
+    execution (merge direction, entity-type mixing, missing date, etc.)
+    become structured errors the model sees and can fix, not silent
+    post-hoc warnings. Gated on `deep_validate` because the mock engine
+    adds 1-5 s per attempt and callers on the sync /generate endpoint
+    live under a 30 s cap.
+    """
+    if deep_validate:
+        return validation.validate_dry_run(script)
+    return validation.validate_static(script)
+
+
 def _run_tool_loop(
     client: Anthropic,
     model: str,
@@ -219,6 +236,7 @@ def generate_script(
     question: str,
     lang: str = "no",
     max_repair: int = 1,
+    deep_validate: bool = False,
 ) -> dict:
     client = _client()
 
@@ -274,7 +292,7 @@ def generate_script(
                 }
 
     script = parsed.get("script", "") or ""
-    vr = validation.validate_static(script)
+    vr = _validate(script, deep_validate)
 
     # Track best-so-far across repair attempts so a worse repair doesn't
     # discard a better earlier draft.
@@ -325,7 +343,7 @@ def generate_script(
                 # Repair attempt produced nothing usable — keep best, stop.
                 break
         new_script = new_parsed.get("script", "") or ""
-        new_vr = validation.validate_static(new_script)
+        new_vr = _validate(new_script, deep_validate)
         if _is_better(new_vr, best["vr"]):
             best = {
                 "parsed": new_parsed,
@@ -403,6 +421,7 @@ def revise_script(
     revision: str,
     lang: str = "no",
     max_repair: int = 1,
+    deep_validate: bool = False,
 ) -> dict:
     """Apply a natural-language revision to an existing microdata script.
 
@@ -462,7 +481,7 @@ def revise_script(
                 }
 
     new_script = parsed.get("script", "") or ""
-    vr = validation.validate_static(new_script)
+    vr = _validate(new_script, deep_validate)
 
     best = {
         "parsed": parsed,
@@ -508,7 +527,7 @@ def revise_script(
             if new_parsed is None:
                 break
         new_script_attempt = new_parsed.get("script", "") or ""
-        new_vr = validation.validate_static(new_script_attempt)
+        new_vr = _validate(new_script_attempt, deep_validate)
         if _is_better(new_vr, best["vr"]):
             best = {
                 "parsed": new_parsed,
@@ -583,11 +602,11 @@ def smart_query(
 
     if intent == "script_gen":
         envelope["result"] = generate_script(
-            question=question, lang=resolved_lang, max_repair=max_repair
+            question=question,
+            lang=resolved_lang,
+            max_repair=max_repair,
+            deep_validate=deep_validate,
         )
-        if deep_validate and envelope["result"].get("script"):
-            deep = validation.validate_dry_run(envelope["result"]["script"])
-            envelope["result"]["validation"] = deep.to_dict()
     elif intent == "variable_search":
         hits = retrieval.server_variable_search(query=question, lang=resolved_lang, k=15)
         envelope["result"] = {"variables": hits}

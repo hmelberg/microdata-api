@@ -354,8 +354,18 @@ def build_full_catalog_block() -> str:
 REPAIR_INSTRUCTION = """\
 The previous script failed validation. Below are the structured errors.
 Produce a corrected version of the same script that fixes each error.
-Never invent variable names; call the `lookup_variable` tool if you need to
-find a correct substitute.
+
+Error-kind guide:
+- `kind="unknown_variable"` — the name is not in the catalog. Pick a
+  different variable from the full catalog above. Never invent names.
+- `kind="unknown_command"` — the command isn't supported. Pick one from
+  the command reference above.
+- `kind="parse"` — syntax error on the given line. Rewrite that line.
+- `kind="runtime"` — came from executing the script on a mock dataset.
+  Re-check the platform rules above (merge direction and `use <source>`
+  ordering, entity-type mixing in one dataset, date-import conventions,
+  person-ref columns for non-Person entities). The message usually names
+  the failing construct.
 
 Return the same JSON contract as before.
 """

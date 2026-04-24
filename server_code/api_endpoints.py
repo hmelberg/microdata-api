@@ -215,12 +215,9 @@ def http_generate():
 
     t0 = time.time()
     result = generation.generate_script(
-        question=question, lang=lang, max_repair=max_repair
+        question=question, lang=lang, max_repair=max_repair,
+        deep_validate=deep_validate,
     )
-
-    if deep_validate and result.get("script"):
-        deep = validation.validate_dry_run(result["script"])
-        result["validation"] = deep.to_dict()
 
     latency_ms = int((time.time() - t0) * 1000)
     utils.log_request(
@@ -265,12 +262,9 @@ def http_revise():
 
     t0 = time.time()
     result = generation.revise_script(
-        script=script, revision=revision, lang=lang, max_repair=max_repair
+        script=script, revision=revision, lang=lang, max_repair=max_repair,
+        deep_validate=deep_validate,
     )
-
-    if deep_validate and result.get("script"):
-        deep = validation.validate_dry_run(result["script"])
-        result["validation"] = deep.to_dict()
 
     latency_ms = int((time.time() - t0) * 1000)
     utils.log_request(
