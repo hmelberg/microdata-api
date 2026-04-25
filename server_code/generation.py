@@ -27,30 +27,47 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 REPAIR_MODEL = "claude-opus-4-7"  # used only if the second repair also fails
 JUDGE_MODEL = "claude-opus-4-7"
 
-JUDGE_SYSTEM = """You are evaluating microdata.no script-generation quality.
+JUDGE_SYSTEM_TEMPLATE = """You are evaluating microdata.no script-generation quality.
 
 You will see a user question (Norwegian or English), a generated microdata.no
 DSL script, and optionally a reference script that solves the same task.
 
-IMPORTANT — TRUST THE SYNTAX. The script has already been validated against
-microdata.no's grammar and against the live variable + command catalog. Every
-command, function, and variable name in it has been verified to exist on the
-real platform. Do NOT downgrade the score because something looks unfamiliar
-to you (`sysmiss(x)`, `require <db> as <alias>`, `merge <vars> into <ds> on
-<key>`, `logit`, `i.var` interactions, variable names like `ARBLONN_2022`
-etc. are all valid microdata.no constructs even if they differ from Stata,
-R, SQL or pandas conventions you may be more familiar with).
+IMPORTANT — TRUST THE SYNTAX AND THE CATALOG. The script has already been
+validated against microdata.no's grammar and against the live variable +
+command catalog. Every command, function, and variable name in it has been
+verified to exist on the real platform.
+
+The COMPLETE list of valid microdata.no commands is:
+
+{COMMAND_LIST}
+
+If the script uses any name from that list, treat it as valid no matter
+how unfamiliar it looks. The same applies to functions like `sysmiss(x)`,
+import syntax like `require <db> as <alias>`, merge syntax like
+`merge <vars> into <ds> on <key>`, interaction syntax like `i.var`, and
+SSB-style variable names with year suffixes like `ARBLONN_2022`. None
+of these are "invented" — they are platform-specific conventions that
+differ from Stata, R, SQL or pandas.
 
 Your job is to evaluate **semantic correctness** — does the script answer
-the user's question correctly? Wrong analytical method, wrong aggregation
-level, wrong join direction, missing key steps, off-topic output: those are
-reasons to lower the score. Unfamiliar-looking but valid syntax is not.
+the user's question correctly? Real reasons to lower the score:
+- Wrong analytical method for the question
+- Wrong aggregation level (e.g. event-level when person-level was asked)
+- Wrong join direction
+- Silently substituting different data than the user asked for (e.g.
+  hardcoding 2023 when the user asked for 2015)
+- Missing key steps the user explicitly requested (e.g. user asked for
+  sorting by gap size and the script never sorts)
+- Dead code / abandoned datasets that show the script is not coherent
+- Off-topic output
+
+Unfamiliar-looking but valid syntax is NOT a reason to lower the score.
 
 Score the generated script 1-5:
 - 5: Correctly and completely answers the question. Variables, syntax, and analytical approach are all sound. The user could run it and get exactly what they asked for.
 - 4: Substantially correct. Minor issues (missing optional flag, slightly suboptimal variable choice, tabulate where collapse would have been cleaner) but the user gets a meaningful answer.
 - 3: Partially correct. Right direction but missing key steps, wrong aggregation level, suboptimal variables, or a bug that produces misleading output.
-- 2: Addresses the right topic but the approach is wrong (wrong analytical method, wrong join direction, mixes incompatible entity types).
+- 2: Addresses the right topic but the approach is wrong (wrong analytical method, wrong join direction, mixes incompatible entity types, silently substituted different data than asked, or left dead code).
 - 1: Doesn't answer the question at all (empty, off-topic, or fundamentally broken).
 
 When a reference script is provided it is one valid solution — equivalent
@@ -61,6 +78,10 @@ When no reference is provided, score on the script's own merits.
 
 Return STRICT JSON, no prose, no code fence:
 {"score": <1-5>, "rationale": "<one or two sentences>"}"""
+
+
+def _build_judge_system() -> str:
+    return JUDGE_SYSTEM_TEMPLATE.replace("{COMMAND_LIST}", prompts.build_judge_command_list())
 
 
 def _client() -> Anthropic:
@@ -756,7 +777,7 @@ def judge_script(
             system=[
                 {
                     "type": "text",
-                    "text": JUDGE_SYSTEM,
+                    "text": _build_judge_system(),
                     "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 }
             ],

@@ -37,6 +37,28 @@ variable (value → meaning), the codelist reference, available-years
 range, or the full long description. Do not use it to search for a
 name — the catalog above is exhaustive. Never invent variable names.
 
+**Workflow hygiene (script_gen):**
+
+1. **Don't silently substitute when the user asks for unavailable data.**
+   If the user asks for a year/date range outside what a databank covers
+   (e.g. "Kaplan-Meier from 2015" but NPR DRAFT only has 2023 data), do
+   NOT silently change the year and pretend you fulfilled the request.
+   Instead: produce the closest honest script and call out the
+   substitution in the `rationale` field (e.g. "NPR DRAFT only covers
+   2023, so the analysis uses 2023-01-01 as start. Specify a different
+   databank version if you need 2015 data.").
+
+2. **No dead code, no abandoned datasets.** If you decide partway through
+   that an approach won't work, REWRITE the script — don't leave the
+   first attempt's `create-dataset`, `import` or `merge` lines behind.
+   The final script you emit should be the single coherent path you'd
+   actually run, not a journey of attempts.
+
+3. **Honor every concrete requirement.** If the user asks for "sorted
+   by gap size", "for the 2018-2022 period", "stratified by gender",
+   etc. — make sure the script actually does that thing, not just the
+   headline analysis.
+
 You must respond with a JSON object matching the contract shown in the
 user's turn. No extra prose outside the JSON.
 """
@@ -57,7 +79,12 @@ GRAMMAR_CHEATSHEET = """\
   `replace <name> = <expr> [if <cond>]`, `recode ...`.
 - Analysis: `summarize`, `tabulate`, `correlate`, `regress`, `logit`,
   `anova`, `ci`, `normaltest`, `transitions-panel`, `ivregress`.
-- Reshape: `reshape long ...`, `reshape wide ...`.
+- Reshape: `reshape long ...`, `reshape wide ...`,
+  `reshape-to-panel <var-prefix> [<var-prefix> ...]` (turns wide imports like
+  `ledig18 ledig19 ledig20` into a long panel; auto-creates a column
+  literally named `panel@date` — note the `panel@` prefix, NOT `date@panel`).
+  After reshape-to-panel you may use `tabulate-panel`, `regress-panel`,
+  `transitions-panel`.
 - Aggregation: `collapse (stat) var -> new_name [, by(...)]`.
 - Filter: `keep if <cond>`, `drop if <cond>`.
 - Loops: `for i in (a b c) { ... } end` or `for-each x in a b c { body }`.
@@ -417,6 +444,21 @@ def build_commands_reference() -> str:
             current_cat = cat
         lines.append(_compact_command_line(r))
     return "\n".join(lines)
+
+
+def build_judge_command_list() -> str:
+    """Return a comma-separated list of valid microdata.no command names.
+
+    Used by the LLM-judge so Opus stops false-flagging real but unfamiliar
+    commands (`reshape-to-panel`, `tabulate-panel`, `kaplan-meier`, etc.)
+    as "invented". Just names — no descriptions — to keep the judge prompt
+    small (cached on Opus is expensive at $1.50/M cache-read).
+    """
+    corpus = retrieval.get_corpus()
+    names = sorted(
+        {(r.get("name") or "").strip() for r in (corpus.get("commands") or []) if r.get("name")}
+    )
+    return ", ".join(f"`{n}`" for n in names)
 
 
 def build_canonical_examples() -> str:
