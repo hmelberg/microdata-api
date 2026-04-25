@@ -236,6 +236,85 @@ replace astma = 0 if sysmiss(astma)   // unmatched persons → no admission
 """
 
 
+DATASET_STRUCTURE = """\
+## Dataset structures and how to combine them
+
+Different microdata.no datasets store **different units of observation**.
+Knowing what a row represents is the key to choosing the right import,
+collapse, and merge strategy.
+
+**Person-level** (one row per person)
+- Most SSB FDB variables (`BEFOLKNING_*`, `INNTEKT_*`, `NUDB_*`,
+  `SIVSTANDFDT_*`).
+- Implicit row id: `PERSONID_1` (encrypted PID, same across SSB registers).
+
+**Multi-row-per-person** (one row per event / job / vehicle / course / …)
+- Each such dataset has a **person-ref column** that points back to the
+  person — see the table in the next section. Examples:
+    - NPR (hospital admissions): one row per admission, person-ref = `NPRID`
+    - A-ordningen (jobb): one row per employment relationship,
+      person-ref = `ARBEIDSFORHOLD_PERSON`
+    - Kjøretøyregisteret: one row per vehicle, person-ref =
+      `KJORETOY_KJORETOYID_FNR`
+    - NUDB-kurs: one row per course completion, person-ref = `NUDB_KURS_FNR`
+- The same person can appear in many rows (or zero).
+
+### Three import modes
+
+1. **Cross-section** — `import db/VAR YYYY-MM-DD [as alias]`. One value
+   per person at one date. Most common.
+2. **Event / forløp** — `import-event db/VAR YYYY-MM-DD to YYYY-MM-DD
+   [as alias]`. Use when you need the full history of how a status
+   changed inside a window (e.g. all sivilstand changes 2018→2022).
+   Each person gets multiple rows, one per change. Useful for
+   detecting transitions (e.g. "did this person change marital status?").
+   Cannot be mixed with cross-section imports in the same dataset.
+3. **Panel** — `import-panel db/VAR1 db/VAR2 YYYY-MM-DD YYYY-MM-DD
+   [YYYY-MM-DD ...]`. Long-format dataset with one row per
+   (person, time-point). Use for repeated cross-sections you want to
+   analyse together (e.g. wage in 2018, 2019, 2020). Must be the FIRST
+   thing in an empty dataset.
+
+### Combining multi-row-per-person data with person-level data
+
+**Pattern A — collapse, then merge into person dataset.**
+Use when you want a person-level summary of events. Build the event
+dataset, collapse to person-level using the person-ref column, then
+push into the person dataset:
+
+```microdata
+// Build NPR event dataset, collapse to person, merge into population
+use npr_data
+collapse (count) HOVEDTILSTAND1 -> n_admissions, by(NPRID)
+merge n_admissions into personer on pid   // pid is alias for NPRID
+use personer
+replace n_admissions = 0 if sysmiss(n_admissions)  // unmatched = 0 events
+```
+
+**Pattern B — merge person attribute INTO event dataset (one-to-many).**
+Use when you want to analyse events stratified by a person attribute
+(e.g. "how many hospital admissions are male vs female"). The merge
+goes the other direction: each person row gets duplicated across all
+their events.
+
+```microdata
+// First build personer with the attribute you want to add
+create-dataset personer
+import db/BEFOLKNING_KJOENN as kjonn
+
+// Then merge kjonn INTO the event dataset
+use personer
+merge kjonn into npr_data on pid
+use npr_data
+tabulate kjonn HOVEDTILSTAND1   // events grouped by sex
+```
+
+Choose A when the analysis unit is the person (e.g. regression of
+income on number of admissions). Choose B when the analysis unit is
+the event (e.g. tabulate admissions by sex).
+"""
+
+
 def build_entity_links_block() -> str:
     """Render the auto-derived entity→person-ref mapping + conventions.
 
@@ -492,6 +571,7 @@ def cached_prefix() -> str:
                 [
                     GRAMMAR_CHEATSHEET,
                     DATABANK_CHEATSHEET,
+                    DATASET_STRUCTURE,
                     build_entity_links_block(),
                     NPR_CANONICAL_IMPORTS,
                     MERGE_CHEATSHEET,
