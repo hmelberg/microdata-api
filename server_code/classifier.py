@@ -91,7 +91,7 @@ def classify(question: str, default_lang: str = "no") -> dict:
                 {
                     "type": "text",
                     "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 }
             ],
             messages=[{"role": "user", "content": question}],

@@ -68,10 +68,14 @@ def _dispatch_tool(name: str, args: dict) -> Any:
 
 
 def _cached_prefix_block() -> dict:
+    # 1h TTL (vs the default 5 min) suits a bursty usage pattern: an active
+    # session of 1-2 hours with multi-minute think-time gaps between queries.
+    # Write costs 2× base instead of 1.25×, but cuts writes-per-session from
+    # ~8 to 1, which is a net ~5× saving on the cached portion.
     return {
         "type": "text",
         "text": prompts.cached_prefix(),
-        "cache_control": {"type": "ephemeral"},
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
     }
 
 
