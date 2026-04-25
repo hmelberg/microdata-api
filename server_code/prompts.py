@@ -41,19 +41,15 @@ name — the catalog above is exhaustive. Never invent variable names.
 script that violates any of them is a failed response, regardless of how
 sophisticated the analysis looks.**
 
-1. **USE THE EXACT YEAR/DATE THE USER ASKED FOR.** If the user says
-   "for 2022", every Time-Varying import MUST use `2022-01-01` (or the
-   actual date appropriate to the variable's reference convention) —
-   NEVER default to 2023, 2024, or "the most recent year". The year
-   goes in the import statement, NOT in the variable name:
+1. **Use the exact year the user asked for.** The year goes in the
+   import statement, not in the variable name:
    - ✅ `import db/INNTEKT_WLONN 2022-01-01 as innt22`
    - ❌ `import db/INNTEKT_WLONN_2022 as innt22`  (variable doesn't exist)
    - ❌ `import db/INNTEKT_WLONN 2023-01-01 as innt22`  (wrong year — user asked 2022)
-   If the user's year is genuinely outside the databank's coverage
-   (e.g. NPR DRAFT only has 2023 data and the user asks for 2015), do
-   NOT silently use 2023 — produce the closest honest script AND state
-   the substitution in the `rationale` field, e.g. "NPR DRAFT only
-   covers 2023; analysis uses 2023-01-01 as start instead of 2015."
+
+   If the asked year is outside what a databank covers, do NOT silently
+   use the latest available — pick the closest year and note the
+   substitution in the `rationale` field.
 
 2. **NO DEAD CODE, NO ABANDONED DATASETS.** If you decide partway
    through that an approach won't work, REWRITE the script — do NOT
@@ -116,7 +112,7 @@ short alias you choose (`as <alias>`) as the prefix in subsequent imports.
 
 | Databank | `require` line | Conventional alias | Used for |
 |---|---|---|---|
-| SSB FDB | `require no.ssb.fdb:N as db` | `db` | All SSB register data (income, demographics, education, geography). N is the version (typical: 30+). |
+| SSB FDB | `require no.ssb.fdb:52 as db` | `db` | All SSB register data (income, demographics, education, geography). The current version is **52**. Older versions (30, 40, etc.) still exist but are stale — always use the latest unless the user explicitly asks for a specific older version. SSB releases new versions periodically (53, 54, …). |
 | FHI NPR (hospital registry) | `require no.fhi.npr:DRAFT as fnpr` | `fnpr` | Norwegian Patient Registry — hospital admissions. |
 
 **Imports use the alias as prefix:** `import db/BEFOLKNING_KJOENN as kjonn`.
