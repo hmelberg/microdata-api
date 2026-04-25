@@ -378,3 +378,43 @@ def http_variables_search(**kwargs):
         return _json({"error": "missing 'q'"}, status=400)
     results = retrieval.server_variable_search(query=q, lang=lang, k=k)
     return _json({"results": results})
+
+
+# ---------------------------------------------------------------------------
+# /judge — LLM-judge for the eval harness. Lives server-side so the local
+# eval script can stay free of ANTHROPIC_API_KEY.
+
+
+@anvil.server.http_endpoint("/judge", methods=["POST"], cross_site_session=False, enable_cors=True)
+def http_judge():
+    alias, err = _authenticate_or_fail()
+    if err:
+        return err
+    body = _load_body()
+    question = (body.get("question") or "").strip()
+    generated = body.get("generated_script") or ""
+    reference = body.get("reference_script") or ""
+    lang = body.get("lang") or "no"
+    if not question:
+        return _json({"error": "missing 'question'"}, status=400)
+
+    t0 = time.time()
+    result = generation.judge_script(
+        question=question,
+        generated_script=generated,
+        reference_script=reference,
+        lang=lang,
+    )
+    latency_ms = int((time.time() - t0) * 1000)
+
+    utils.log_request(
+        endpoint="/judge",
+        question=question,
+        lang=lang,
+        model=result.get("model", ""),
+        latency_ms=latency_ms,
+        cache_stats=result.get("cache_stats") or {},
+        api_key_alias=alias,
+    )
+    result["latency_ms"] = latency_ms
+    return _json(result)

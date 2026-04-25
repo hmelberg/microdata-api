@@ -25,6 +25,28 @@ import validation
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 REPAIR_MODEL = "claude-opus-4-7"  # used only if the second repair also fails
+JUDGE_MODEL = "claude-opus-4-7"
+
+JUDGE_SYSTEM = """You are evaluating microdata.no script-generation quality.
+
+You will see a user question (Norwegian or English), a generated microdata.no
+DSL script, and optionally a reference script that solves the same task.
+
+Score the generated script 1-5:
+- 5: Correctly and completely answers the question. Variables, syntax, and analytical approach are all sound. The user could run it and get exactly what they asked for.
+- 4: Substantially correct. Minor issues (missing optional flag, slightly suboptimal variable choice, tabulate where collapse would have been cleaner) but the user gets a meaningful answer.
+- 3: Partially correct. Right direction but missing key steps, wrong aggregation level, suboptimal variables, or a bug that produces misleading output.
+- 2: Addresses the right topic but the approach is wrong (wrong analytical method, wrong join direction, mixes incompatible entity types).
+- 1: Doesn't answer the question at all (empty, off-topic, or fundamentally broken).
+
+When a reference script is provided it is one valid solution — equivalent
+approaches that answer the question correctly should still score 5. Do NOT
+require character-for-character match.
+
+When no reference is provided, score on the script's own merits.
+
+Return STRICT JSON, no prose, no code fence:
+{"score": <1-5>, "rationale": "<one or two sentences>"}"""
 
 
 def _client() -> Anthropic:
@@ -675,5 +697,86 @@ def answer_question(question: str, lang: str = "no") -> dict:
         "answer": parsed.get("answer", ""),
         "citations": parsed.get("citations", []),
         "model": DEFAULT_MODEL,
+        "cache_stats": usage,
+    }
+
+
+# ---------------------------------------------------------------------------
+# LLM-judge (Opus 4.7) — used by the eval harness to score generated scripts.
+
+
+def judge_script(
+    question: str,
+    generated_script: str,
+    reference_script: str = "",
+    lang: str = "no",
+) -> dict:
+    """Return {score: 1-5, rationale: str, model, cache_stats}.
+
+    Server-side judge so the eval harness never needs ANTHROPIC_API_KEY
+    locally. The judge prompt is cached with 1h TTL for cheap re-use across
+    a full eval pass.
+    """
+    if not (generated_script or "").strip():
+        return {
+            "score": 1,
+            "rationale": "Generated script is empty.",
+            "model": JUDGE_MODEL,
+            "cache_stats": {},
+        }
+    user_parts = [
+        f"# Question ({lang})\n\n{question}",
+        f"# Generated script\n\n```microdata\n{generated_script.strip()}\n```",
+    ]
+    if (reference_script or "").strip():
+        user_parts.append(
+            f"# Reference script (one valid solution; not the only one)\n\n"
+            f"```microdata\n{reference_script.strip()}\n```"
+        )
+
+    client = _client()
+    try:
+        resp = client.messages.create(
+            model=JUDGE_MODEL,
+            max_tokens=400,
+            system=[
+                {
+                    "type": "text",
+                    "text": JUDGE_SYSTEM,
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+            messages=[{"role": "user", "content": "\n\n".join(user_parts)}],
+        )
+        text = ""
+        for block in resp.content:
+            if getattr(block, "type", None) == "text":
+                text = block.text
+                break
+        usage = resp.usage.model_dump() if hasattr(resp.usage, "model_dump") else dict(resp.usage)
+    except Exception as exc:
+        return {
+            "score": 0,
+            "rationale": f"Judge error: {type(exc).__name__}: {exc}",
+            "model": JUDGE_MODEL,
+            "cache_stats": {},
+        }
+
+    parsed = _parse_json_response(text) or _recover_partial_json(text)
+    if not isinstance(parsed, dict):
+        return {
+            "score": 0,
+            "rationale": f"Could not parse judge output: {(text or '')[:200]}",
+            "model": JUDGE_MODEL,
+            "cache_stats": usage,
+        }
+    try:
+        score = int(parsed.get("score", 0))
+    except (TypeError, ValueError):
+        score = 0
+    return {
+        "score": max(0, min(5, score)),
+        "rationale": str(parsed.get("rationale", ""))[:500],
+        "model": JUDGE_MODEL,
         "cache_stats": usage,
     }
