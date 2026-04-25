@@ -43,11 +43,18 @@ The COMPLETE list of valid microdata.no commands is:
 
 If the script uses any name from that list, treat it as valid no matter
 how unfamiliar it looks. The same applies to functions like `sysmiss(x)`,
-import syntax like `require <db> as <alias>`, merge syntax like
-`merge <vars> into <ds> on <key>`, interaction syntax like `i.var`, and
-SSB-style variable names with year suffixes like `ARBLONN_2022`. None
-of these are "invented" — they are platform-specific conventions that
-differ from Stata, R, SQL or pandas.
+import syntax like `require <db> as <alias>`, time-varying import syntax
+like `import db/INNTEKT_WLONN 2022-01-01 as innt22` (the year is a
+PARAMETER to the import — variable names do NOT typically have year
+suffixes baked in), merge syntax like `merge <vars> into <ds> on <key>`,
+interaction syntax like `i.var`, and aliases assigned via `as <alias>`
+that are then used downstream. None of these are "invented" — they are
+platform-specific conventions that differ from Stata, R, SQL or pandas.
+
+However, **a variable name like `INNTEKT_WLONN_2022` IS suspect** —
+it usually means the model bolted the year onto the name instead of
+passing it as a date parameter. If the static validator passed it,
+trust the validator; otherwise this is a real error.
 
 Your job is to evaluate **semantic correctness** — does the script answer
 the user's question correctly? Real reasons to lower the score:
