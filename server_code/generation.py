@@ -212,15 +212,16 @@ def _run_tool_loop(
 def _assemble_generate_user_turn(
     question: str,
     lang: str,
-    candidates: list[dict],
     examples: list[dict],
     manual_sections: list[dict],
 ) -> list[dict]:
+    # Variable candidates intentionally omitted: the full catalog is already
+    # in the cached prefix, so a per-request top-k block is pure duplication
+    # and adds prompt noise without adding information.
     dynamic = "\n\n".join(
         filter(
             None,
             [
-                prompts.render_variable_candidates(candidates),
                 prompts.render_retrieved_examples(examples),
                 prompts.render_manual_sections(manual_sections),
             ],
@@ -249,10 +250,9 @@ def generate_script(
 ) -> dict:
     client = _client()
 
-    # Retrieval. Wider candidate set so the model rarely needs lookup_variable
-    # mid-generation, which keeps total latency under Anvil's 30s execution cap.
+    # Retrieval. Variables now live in the cached prefix in full, so we only
+    # retrieve examples and manual sections per request.
     cmd_keywords = []
-    candidates = retrieval.search_variables(question, lang=lang, k=25)
     examples = retrieval.search_examples(question, lang=lang, k=3, boost_commands=cmd_keywords)
     manual_sections = retrieval.search_manual(question, lang=lang, k=2)
 
@@ -260,7 +260,7 @@ def generate_script(
         {
             "role": "user",
             "content": _assemble_generate_user_turn(
-                question, lang, candidates, examples, manual_sections
+                question, lang, examples, manual_sections
             ),
         }
     ]
@@ -386,7 +386,6 @@ def _assemble_revise_user_turn(
     revision: str,
     lang: str,
     existing_vars: list[str],
-    candidates: list[dict],
     examples: list[dict],
     manual_sections: list[dict],
 ) -> list[dict]:
@@ -397,12 +396,13 @@ def _assemble_revise_user_turn(
             + "\n".join(f"- `{v}`" for v in existing_vars)
         )
 
+    # Variable candidates intentionally omitted: full catalog is in the
+    # cached prefix.
     dynamic = "\n\n".join(
         filter(
             None,
             [
                 existing_block,
-                prompts.render_variable_candidates(candidates),
                 prompts.render_retrieved_examples(examples),
                 prompts.render_manual_sections(manual_sections),
             ],
@@ -440,7 +440,6 @@ def revise_script(
     client = _client()
 
     existing_vars = validation._extract_variables(script)
-    candidates = retrieval.search_variables(revision, lang=lang, k=15)
     examples = retrieval.search_examples(revision, lang=lang, k=3)
     manual_sections = retrieval.search_manual(revision, lang=lang, k=2)
 
@@ -448,7 +447,7 @@ def revise_script(
         {
             "role": "user",
             "content": _assemble_revise_user_turn(
-                script, revision, lang, existing_vars, candidates, examples, manual_sections
+                script, revision, lang, existing_vars, examples, manual_sections
             ),
         }
     ]
@@ -629,15 +628,15 @@ def answer_question(question: str, lang: str = "no") -> dict:
     client = _client()
     manual_sections = retrieval.search_manual(question, lang=lang, k=3)
     examples = retrieval.search_examples(question, lang=lang, k=2)
-    candidates = retrieval.search_variables(question, lang=lang, k=5)
 
+    # Variable candidates intentionally omitted: full catalog is in the
+    # cached prefix.
     dynamic = "\n\n".join(
         filter(
             None,
             [
                 prompts.render_manual_sections(manual_sections),
                 prompts.render_retrieved_examples(examples),
-                prompts.render_variable_candidates(candidates) if candidates else "",
             ],
         )
     )
