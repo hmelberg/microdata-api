@@ -59,11 +59,6 @@ sophisticated the analysis looks.**
    `generate <name> = ...` of the same name is a bug. A merge that
    references a dataset you never built is a bug.
 
-3. **HONOR EVERY CONCRETE REQUIREMENT.** If the user asks for "sorted
-   by gap size", "for the 2018-2022 period", "stratified by gender",
-   etc. — the script must actually do that thing, not just the
-   headline analysis. Re-read the question before emitting.
-
 You must respond with a JSON object matching the contract shown in the
 user's turn. No extra prose outside the JSON.
 """
@@ -157,42 +152,16 @@ DATE_QUIRKS = """\
 
 
 NPR_CANONICAL_IMPORTS = """\
-## NPR (Norsk Pasientregister) canonical imports
+## NPR (Norsk Pasientregister) — gotchas
 
-NPR data is fundamentally event-level (one row per hospital admission), with
-multiple events per person. The microdata.no platform knows this from the
-source metadata, so:
-
-- **Import `NPRID` (the person id) first**, then per-event attributes
-  (diagnoses, dates, level). This is the common, working pattern.
-- **Do NOT also import `AGGRSHOPPID`** in the same dataset. It has a
-  different `enhetstype` (`Behandlingsopphold`) than `NPRID` (`Person`), and
-  mixing them in one dataset triggers a `unit_id` error. AGGRSHOPPID is
-  rarely needed; the dataset's implicit event identifier suffices for most
-  analyses.
-- For **collapse**, **ALWAYS specify `by(<person-alias>)` explicitly**, e.g.
-  `collapse (max) astma -> astma, by(pid)` or
-  `collapse (count) icd1 -> n_dx, by(pid)`. Without an explicit `by()`, the
-  collapse may not group by person as you'd expect. Use the alias you set
-  in `import fnpr/NPRID as <alias>` (typically `pid`).
-
-Recommended imports and aliases:
-
-```microdata
-require no.fhi.npr:DRAFT as fnpr
-create-dataset npr_data
-import fnpr/NPRID as pid                  // person id (also the cross-registry link key to SSB)
-import fnpr/HOVEDTILSTAND1 as icd1        // main ICD-10 diagnosis
-import fnpr/HOVEDTILSTAND2 as icd2        // secondary diagnosis (optional)
-import fnpr/INNDATO as in_date            // admission date (int: days since 1970-01-01)
-import fnpr/UTDATO as out_date            // discharge date
-import fnpr/INNTID as in_time             // admission time (optional)
-import fnpr/UTTID as out_time             // discharge time (optional)
-import fnpr/OMSORGSNIVA as level          // inpatient / outpatient / day-visit
-import fnpr/NIVA as isf_level             // ISF funding level
-// Skip AGGRSHOPPID unless you specifically need a unique event identifier;
-// in that case put it in a separate dataset to avoid the unit_id mismatch.
-```
+- **Do NOT import `AGGRSHOPPID` alongside `NPRID` in the same dataset.**
+  They have different `enhetstype` (Behandlingsopphold vs Person) and
+  mixing them triggers a `unit_id` error. AGGRSHOPPID is rarely needed —
+  the dataset's implicit event identifier covers most analyses. If you
+  do need AGGRSHOPPID, build a separate dataset for it.
+- **In `collapse`, always pass `by(<person-alias>)` explicitly** — e.g.
+  `collapse (count) icd1 -> n_dx, by(pid)`. Without an explicit `by()`,
+  the grouping is not what you'd expect.
 """
 
 
@@ -577,7 +546,6 @@ def cached_prefix() -> str:
                     MERGE_CHEATSHEET,
                     DATE_QUIRKS,
                     PRIVACY_RULES,
-                    build_top_variables_block(),
                     build_full_catalog_block(),
                     build_commands_reference(),
                     build_canonical_examples(),
