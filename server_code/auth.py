@@ -1,4 +1,3 @@
-import anvil.users
 """Authentication and authorization helpers.
 
 Phase 1: accepts both `Authorization: Bearer <token>` (user accounts via

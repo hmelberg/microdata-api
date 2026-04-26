@@ -1,5 +1,3 @@
-import anvil.email
-import anvil.users
 """HTTP endpoints for user authentication.
 
 Magic-link flow (Phase 1, no Microsoft SSO yet):

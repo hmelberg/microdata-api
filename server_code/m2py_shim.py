@@ -1,5 +1,3 @@
-import anvil.email
-import anvil.users
 """Thin wrapper over the existing m2py.py asset.
 
 m2py.py is shipped as a server module inside the Anvil app (copied from

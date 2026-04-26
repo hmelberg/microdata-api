@@ -1,5 +1,3 @@
-import anvil.email
-import anvil.users
 """HTTP endpoints exposed by the Anvil app.
 
 Anvil exposes server functions over HTTP via @anvil.server.http_endpoint.

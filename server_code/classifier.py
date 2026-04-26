@@ -1,5 +1,3 @@
-import anvil.email
-import anvil.users
 """One-shot intent classifier for the unified /query endpoint.
 
 Uses Claude Haiku 4.5 — small, fast, cheap. The classifier prompt is tiny

@@ -1,5 +1,3 @@
-import anvil.email
-import anvil.users
 """Cross-cutting helpers: API-key auth, rate limit, request logging."""
 
 from __future__ import annotations
