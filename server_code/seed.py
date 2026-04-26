@@ -78,9 +78,18 @@ def seed_phase0():
             ),
         }
 
+    # Idempotency check has to swallow NoSuchColumnError: on a freshly-
+    # created table, auto_create_missing_columns only fires on add_row().
+    # First seed run creates the columns; subsequent runs find existing rows.
+    def _safe_get(table, **kwargs):
+        try:
+            return table.get(**kwargs)
+        except Exception:
+            return None
+
     limits_added = 0
     for cat, grant, init, bytes_, files, kurs_days in DEFAULT_LIMITS:
-        if app_tables.limits_config.get(category=cat) is not None:
+        if _safe_get(app_tables.limits_config, category=cat) is not None:
             continue
         app_tables.limits_config.add_row(
             category=cat,
@@ -96,7 +105,7 @@ def seed_phase0():
 
     whitelist_added = 0
     for pattern, cat, is_super, init_credits, notes in DEFAULT_WHITELIST:
-        if app_tables.email_whitelist.get(pattern=pattern) is not None:
+        if _safe_get(app_tables.email_whitelist, pattern=pattern) is not None:
             continue
         app_tables.email_whitelist.add_row(
             pattern=pattern,
