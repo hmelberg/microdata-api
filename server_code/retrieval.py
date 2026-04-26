@@ -1,3 +1,5 @@
+import anvil.email
+import anvil.users
 """BM25 retrieval + synonym expansion + lookup_variable tool backend.
 
 Reads its corpus from Anvil Data Files (not Data Tables):

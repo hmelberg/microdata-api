@@ -1,3 +1,5 @@
+import anvil.email
+import anvil.users
 """Static prompt content + assembly helpers.
 
 The cached prefix — system prompt + commands reference + grammar cheat

@@ -1,3 +1,5 @@
+import anvil.email
+import anvil.users
 """Claude call with prompt caching + tool use.
 
 Two entry points:

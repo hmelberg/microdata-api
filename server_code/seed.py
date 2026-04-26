@@ -1,3 +1,5 @@
+import anvil.email
+import anvil.users
 """One-shot seeding for tables that need default rows.
 
 Call from the Anvil server console:
