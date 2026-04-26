@@ -1,11 +1,35 @@
 allow_embedding: false
 db_schema:
+  ai_usage_daily:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: ai_usage_daily
   api_usage:
     client: none
     columns: []
     indexes: []
     server: full
     title: api_usage
+  audit_log:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: audit_log
+  auth_tokens:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: auth_tokens
+  email_whitelist:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: email_whitelist
   eval_runs:
     client: none
     columns: []
@@ -30,54 +54,30 @@ db_schema:
     indexes: []
     server: full
     title: Files
-  users:
-    client: none
-    columns: []
-    indexes: []
-    server: full
-    title: users
-  email_whitelist:
-    client: none
-    columns: []
-    indexes: []
-    server: full
-    title: email_whitelist
-  auth_tokens:
-    client: none
-    columns: []
-    indexes: []
-    server: full
-    title: auth_tokens
-  scripts:
-    client: none
-    columns: []
-    indexes: []
-    server: full
-    title: scripts
-  ai_usage_daily:
-    client: none
-    columns: []
-    indexes: []
-    server: full
-    title: ai_usage_daily
   limits_config:
     client: none
     columns: []
     indexes: []
     server: full
     title: limits_config
-  audit_log:
+  scripts:
     client: none
     columns: []
     indexes: []
     server: full
-    title: audit_log
+    title: scripts
   signup_requests:
     client: none
     columns: []
     indexes: []
     server: full
     title: signup_requests
+  users:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: users
 dependencies: []
 name: microdata_api
 package_name: microdata_api
@@ -99,6 +99,9 @@ secrets:
   API_KEY_hans:
     type: secret
     value: {UAYNGOMA6Z4REMAB: rocvdZU7RsxSmZgo+kqFI5lhUhiUvr2s0CR3KMzD2ypQuRlw4wU3BqyFM37d1/pT2rrESNgr8z5cILjzoAnhJDfo+dMRHJdBEd451yHoTu6JmpqY+T+pVyBCOmH92Zz6m1TJULhyBe6ztrxCFRtWol0nzBBe4xtd}
+  BOOTRSTRAP_ADMIN_EMAILS:
+    type: secret
+    value: {UAYNGOMA6Z4REMAB: CZ4PvFKpgnR26+4luAO8wQIQiwKwlcj1GwZgoRVTB4F9RNNctPL/49UfR0cPTlFjqLtI8d3YGAS09pOG20GHpcWWZrUMcsBFSlrj/meoVfHvpK+eS5/i73D4X0GD3jB6DvSj8YjOQAzPKFHD6V72nCvOd2pkaiHOWiAUy4rNwN/rpxNOi4vHctZ+//IQ+w==}
 services:
 - client_config: {enable_v2: true}
   server_config: {auto_create_missing_columns: true}
