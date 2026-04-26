@@ -3,3 +3,5 @@ snowballstemmer
 json5
 rank_bm25
 statsmodels
+pyjwt[crypto]
+cryptography

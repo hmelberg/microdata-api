@@ -30,6 +30,54 @@ db_schema:
     indexes: []
     server: full
     title: Files
+  users:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: users
+  email_whitelist:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: email_whitelist
+  auth_tokens:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: auth_tokens
+  scripts:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: scripts
+  ai_usage_daily:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: ai_usage_daily
+  limits_config:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: limits_config
+  audit_log:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: audit_log
+  signup_requests:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: signup_requests
 dependencies: []
 name: microdata_api
 package_name: microdata_api

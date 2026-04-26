@@ -23,6 +23,7 @@ import classifier
 import retrieval
 import utils
 import validation
+import auth
 
 
 def _json(body: dict, status: int = 200) -> HttpResponse:
@@ -44,14 +45,10 @@ def _load_body() -> dict:
     return body or {}
 
 
-def _authenticate_or_fail():
-    req = anvil.server.request
-    alias = utils.authenticate(req)
-    if not alias:
-        return None, _json({"error": "invalid or missing X-API-Key"}, status=401)
-    if not utils.check_rate_limit(alias):
-        return None, _json({"error": "rate limit exceeded"}, status=429)
-    return alias, None
+# Auth lives in auth.py so future phases (Bearer tokens, role checks,
+# credit enforcement) can extend it without churning this module. Phase 0
+# behavior is unchanged: X-API-Key only.
+_authenticate_or_fail = auth.authenticate_or_fail
 
 
 # ---------------------------------------------------------------------------
