@@ -149,10 +149,19 @@ def _is_valid_email(s: str) -> bool:
 
 
 def _bootstrap_admin_emails() -> set[str]:
-    try:
-        raw = anvil.secrets.get_secret("BOOTSTRAP_ADMIN_EMAILS") or ""
-    except Exception:
-        return set()
+    """Read the comma-separated bootstrap admin list from Anvil Secrets.
+
+    Tolerates a common misspelling ("BOOTRSTRAP_…") so a typo in the IDE
+    doesn't silently lock us out of admin access.
+    """
+    raw = ""
+    for name in ("BOOTSTRAP_ADMIN_EMAILS", "BOOTRSTRAP_ADMIN_EMAILS"):
+        try:
+            raw = anvil.secrets.get_secret(name) or ""
+            if raw:
+                break
+        except Exception:
+            continue
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
@@ -220,8 +229,7 @@ def find_or_create_user(email: str, *, provider_kind: str = "email_magic"):
             # --- Anvil Users service columns ---
             email=email_lc,
             enabled=True,
-            confirmed_email=now,            # implicit confirmation: clicked the magic-link
-            signed_up=now,
+            confirmed_email=True,           # implicit confirmation: clicked the magic-link
             password_hash=None,             # set later if user opts into password login
             n_password_failures=0,
             # --- Our custom domain columns ---
@@ -244,12 +252,10 @@ def find_or_create_user(email: str, *, provider_kind: str = "email_magic"):
         # Existing user — refresh last_login, fill in Anvil Users fields if a
         # legacy row pre-existed without them, and re-check bootstrap admin.
         user["last_login"] = now
-        if user["confirmed_email"] is None:
-            user["confirmed_email"] = now
-        if user["enabled"] is None:
+        if not user["confirmed_email"]:
+            user["confirmed_email"] = True
+        if not user["enabled"]:
             user["enabled"] = True
-        if user["signed_up"] is None:
-            user["signed_up"] = now
         if user["n_password_failures"] is None:
             user["n_password_failures"] = 0
         if email_lc in bootstrap_admins and not user["is_admin"]:
