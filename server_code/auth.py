@@ -18,6 +18,7 @@ import secrets
 import anvil.email
 import anvil.secrets
 import anvil.server
+import anvil.users
 from anvil.server import HttpResponse
 from anvil.tables import app_tables
 
@@ -187,15 +188,43 @@ def match_whitelist(email: str) -> dict:
     }
 
 
+def _lookup_user(email_lc: str):
+    """Find a user row by email. Prefer anvil.users.get_user (canonical) and
+    fall back to a direct table read so we work even if the Users service is
+    misconfigured.
+    """
+    try:
+        user = anvil.users.get_user(email_address=email_lc)
+        if user is not None:
+            return user
+    except Exception:
+        pass
+    return _safe_get(app_tables.users, email=email_lc)
+
+
 def find_or_create_user(email: str, *, provider_kind: str = "email_magic"):
+    """Find or create a row that's compatible with both Anvil Users and our
+    custom domain logic. Anvil Users service watches the `users` table; we
+    populate its required columns (enabled, confirmed_email, signed_up,
+    password_hash, n_password_failures) alongside our own (category, credits,
+    is_admin, …) so future password/Google/MFA flows slot in cleanly.
+    """
     email_lc = email.lower().strip()
-    user = _safe_get(app_tables.users, email=email_lc)
+    user = _lookup_user(email_lc)
     now = dt.datetime.utcnow()
     bootstrap_admins = _bootstrap_admin_emails()
+
     if user is None:
         whitelist = match_whitelist(email_lc)
         user = app_tables.users.add_row(
+            # --- Anvil Users service columns ---
             email=email_lc,
+            enabled=True,
+            confirmed_email=now,            # implicit confirmation: clicked the magic-link
+            signed_up=now,
+            password_hash=None,             # set later if user opts into password login
+            n_password_failures=0,
+            # --- Our custom domain columns ---
             category=whitelist["category"],
             is_admin=email_lc in bootstrap_admins,
             is_superuser=whitelist["is_superuser"],
@@ -212,8 +241,17 @@ def find_or_create_user(email: str, *, provider_kind: str = "email_magic"):
             notes="",
         )
     else:
-        # Existing user — refresh last_login, ensure bootstrap-admin flag is on
+        # Existing user — refresh last_login, fill in Anvil Users fields if a
+        # legacy row pre-existed without them, and re-check bootstrap admin.
         user["last_login"] = now
+        if user["confirmed_email"] is None:
+            user["confirmed_email"] = now
+        if user["enabled"] is None:
+            user["enabled"] = True
+        if user["signed_up"] is None:
+            user["signed_up"] = now
+        if user["n_password_failures"] is None:
+            user["n_password_failures"] = 0
         if email_lc in bootstrap_admins and not user["is_admin"]:
             user["is_admin"] = True
     return user
