@@ -245,6 +245,10 @@ def http_generate():
 
 @anvil.server.http_endpoint("/revise", methods=["POST"], cross_site_session=False, enable_cors=True)
 def http_revise():
+    """Async — revisions can exceed Anvil's 30s HTTP cap, so we launch a
+    background task and let the client poll /task_status. The completed
+    envelope is shaped like bg_smart_query's: {intent, lang, result: {...}}.
+    """
     alias, err = _authenticate_or_fail()
     if err:
         return err
@@ -260,30 +264,24 @@ def http_revise():
     max_repair = int(body.get("max_repair", 1))
     deep_validate = bool(body.get("deep_validate", False))
 
-    t0 = time.time()
-    result = generation.revise_script(
-        script=script, revision=revision, lang=lang, max_repair=max_repair,
-        deep_validate=deep_validate,
+    task = anvil.server.launch_background_task(
+        "bg_revise_script",
+        script, revision, lang, max_repair, deep_validate,
     )
-
-    latency_ms = int((time.time() - t0) * 1000)
+    task_id = task.get_id()
     utils.log_request(
-        endpoint="/revise",
+        endpoint="/revise:launched",
         question=revision,
         lang=lang,
-        model=result.get("model", ""),
-        script=result.get("script", ""),
-        variables_used=result.get("variables_used", []),
-        commands_used=result.get("commands_used", []),
-        validation_passed=(result.get("validation") or {}).get("passed", False),
-        validation_tier=(result.get("validation") or {}).get("tier_ran", "static"),
-        errors=(result.get("validation") or {}).get("errors", []),
-        latency_ms=latency_ms,
-        cache_stats=result.get("cache_stats") or {},
+        model="",
         api_key_alias=alias,
     )
-    result["latency_ms"] = latency_ms
-    return _json(result)
+    return _json({
+        "intent": "revise",
+        "lang": lang,
+        "task_id": task_id,
+        "mode": "async",
+    })
 
 
 # ---------------------------------------------------------------------------

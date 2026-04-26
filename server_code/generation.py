@@ -645,6 +645,28 @@ def bg_smart_query(question, lang="no", max_repair=2, deep_validate=False):
     )
 
 
+@anvil.server.background_task
+def bg_revise_script(script, revision, lang="no", max_repair=1, deep_validate=False):
+    """Background-task wrapper around revise_script.
+
+    Used by /revise so long revisions aren't cut off by Anvil's 30s HTTP
+    cap. Wraps the result in a smart_query-style envelope so /task_status
+    can log it the same way.
+    """
+    result = revise_script(
+        script=script,
+        revision=revision,
+        lang=lang,
+        max_repair=max_repair,
+        deep_validate=deep_validate,
+    )
+    return {
+        "intent": "revise",
+        "lang": lang,
+        "result": result,
+    }
+
+
 def smart_query(
     question: str,
     lang: str = "no",
