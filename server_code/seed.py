@@ -32,12 +32,52 @@ DEFAULT_WHITELIST = [
 ]
 
 
+REQUIRED_TABLES = [
+    "users", "email_whitelist", "auth_tokens", "scripts",
+    "ai_usage_daily", "limits_config", "audit_log", "signup_requests",
+]
+
+
+def _missing_tables() -> list[str]:
+    """Return names of REQUIRED_TABLES that aren't on app_tables yet.
+
+    Anvil materializes tables from anvil.yaml only when a schema-apply
+    happens (IDE prompt) or when each table is created manually. Until
+    then, app_tables won't have the attribute.
+    """
+    return [t for t in REQUIRED_TABLES if getattr(app_tables, t, None) is None]
+
+
+@anvil.server.callable
+def check_tables():
+    """Diagnostic: list which expected tables exist vs are missing."""
+    missing = _missing_tables()
+    present = [t for t in REQUIRED_TABLES if t not in missing]
+    return {"present": present, "missing": missing}
+
+
 @anvil.server.callable
 def seed_phase0():
     """Seed limits_config and email_whitelist with default rows.
 
-    Returns a summary dict of how many rows were added vs already present.
+    Bails out with a clear message if any required table is missing
+    instead of crashing on AttributeError. Idempotent — re-running on a
+    half-seeded state is safe.
     """
+    missing = _missing_tables()
+    if missing:
+        return {
+            "ok": False,
+            "missing_tables": missing,
+            "hint": (
+                "Open the Anvil IDE → Data Tables. You'll see a 'Schema "
+                "out of sync' banner; click 'Apply'. If that doesn't work, "
+                "create each missing table manually (just give it the name "
+                "above; columns auto-create on first row). Then re-run "
+                "anvil.server.call('seed_phase0')."
+            ),
+        }
+
     limits_added = 0
     for cat, grant, init, bytes_, files, kurs_days in DEFAULT_LIMITS:
         if app_tables.limits_config.get(category=cat) is not None:
@@ -71,6 +111,7 @@ def seed_phase0():
         whitelist_added += 1
 
     return {
+        "ok": True,
         "limits_added": limits_added,
         "whitelist_added": whitelist_added,
         "limits_total": len(list(app_tables.limits_config.search())),
