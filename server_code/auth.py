@@ -44,6 +44,14 @@ MAGIC_TOKEN_TTL_MINUTES = 15
 SESSION_PREFIX = "mdapi_"
 
 
+def _utcnow() -> dt.datetime:
+    """Timezone-aware UTC now. Anvil's data tables store datetimes WITH
+    tzinfo, so reads come back aware. Mixing naive (datetime.utcnow()) with
+    aware values raises TypeError on comparison. Use this everywhere.
+    """
+    return dt.datetime.now(dt.timezone.utc)
+
+
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -60,15 +68,15 @@ def _safe_get(table, **kwargs):
 
 def issue_session_token(user, request_meta: dict | None = None) -> tuple[str, dt.datetime]:
     raw = SESSION_PREFIX + secrets.token_urlsafe(32)
-    expires = dt.datetime.utcnow() + dt.timedelta(days=SESSION_TOKEN_TTL_DAYS)
+    expires = _utcnow() + dt.timedelta(days=SESSION_TOKEN_TTL_DAYS)
     request_meta = request_meta or {}
     app_tables.auth_tokens.add_row(
         user=user,
         token_hash=_hash_token(raw),
         kind="session",
-        created=dt.datetime.utcnow(),
+        created=_utcnow(),
         expires=expires,
-        last_used=dt.datetime.utcnow(),
+        last_used=_utcnow(),
         user_agent=request_meta.get("user_agent", "")[:500],
         ip=request_meta.get("ip", ""),
         revoked=False,
@@ -82,12 +90,12 @@ def issue_magic_code(email: str) -> str:
     the whitelist match happens on confirmed email.
     """
     raw = secrets.token_urlsafe(24)
-    expires = dt.datetime.utcnow() + dt.timedelta(minutes=MAGIC_TOKEN_TTL_MINUTES)
+    expires = _utcnow() + dt.timedelta(minutes=MAGIC_TOKEN_TTL_MINUTES)
     app_tables.auth_tokens.add_row(
         user=None,
         token_hash=_hash_token(raw),
         kind="magic",
-        created=dt.datetime.utcnow(),
+        created=_utcnow(),
         expires=expires,
         last_used=None,
         user_agent="",
@@ -106,11 +114,11 @@ def consume_magic_code(raw: str) -> str | None:
         return None
     if row["revoked"]:
         return None
-    if row["expires"] and row["expires"] < dt.datetime.utcnow():
+    if row["expires"] and row["expires"] < _utcnow():
         return None
     email = row["magic_email"]
     row["revoked"] = True
-    row["last_used"] = dt.datetime.utcnow()
+    row["last_used"] = _utcnow()
     return email
 
 
@@ -119,12 +127,12 @@ def lookup_session_token(raw: str):
     row = _safe_get(app_tables.auth_tokens, token_hash=_hash_token(raw), kind="session")
     if row is None or row["revoked"]:
         return None, None
-    if row["expires"] and row["expires"] < dt.datetime.utcnow():
+    if row["expires"] and row["expires"] < _utcnow():
         return None, None
     user = row["user"]
     if user is None or user.get("deleted_at"):
         return None, None
-    row["last_used"] = dt.datetime.utcnow()
+    row["last_used"] = _utcnow()
     return user, row
 
 
@@ -219,7 +227,7 @@ def find_or_create_user(email: str, *, provider_kind: str = "email_magic"):
     """
     email_lc = email.lower().strip()
     user = _lookup_user(email_lc)
-    now = dt.datetime.utcnow()
+    now = _utcnow()
     bootstrap_admins = _bootstrap_admin_emails()
 
     if user is None:
