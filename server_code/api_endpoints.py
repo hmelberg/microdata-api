@@ -97,7 +97,7 @@ def http_query():
             question=question,
             lang=resolved_lang,
             model="",
-            api_key_alias=alias,
+            api_key_alias=auth.principal_alias(alias),
         )
         return _json({
             "intent": intent,
@@ -124,7 +124,7 @@ def http_query():
         model=result.get("model", ""),
         latency_ms=latency_ms,
         cache_stats=result.get("cache_stats") or {},
-        api_key_alias=alias,
+        api_key_alias=auth.principal_alias(alias),
     )
 
     return _json({
@@ -180,7 +180,7 @@ def http_task_status(**kwargs):
                 validation_tier=(r.get("validation") or {}).get("tier_ran", "static"),
                 errors=(r.get("validation") or {}).get("errors", []),
                 cache_stats=r.get("cache_stats") or {},
-                api_key_alias=alias,
+                api_key_alias=auth.principal_alias(alias),
             )
         except Exception:
             pass
@@ -230,7 +230,7 @@ def http_generate():
         errors=(result.get("validation") or {}).get("errors", []),
         latency_ms=latency_ms,
         cache_stats=result.get("cache_stats") or {},
-        api_key_alias=alias,
+        api_key_alias=auth.principal_alias(alias),
     )
     result["latency_ms"] = latency_ms
     return _json(result)
@@ -271,7 +271,7 @@ def http_revise():
         question=revision,
         lang=lang,
         model="",
-        api_key_alias=alias,
+        api_key_alias=auth.principal_alias(alias),
     )
     return _json({
         "intent": "revise",
@@ -307,7 +307,7 @@ def http_ask():
         model=result.get("model", ""),
         latency_ms=latency_ms,
         cache_stats=result.get("cache_stats") or {},
-        api_key_alias=alias,
+        api_key_alias=auth.principal_alias(alias),
     )
     result["latency_ms"] = latency_ms
     return _json(result)
@@ -347,7 +347,7 @@ def http_validate():
         validation_tier=result.get("tier_ran", "static"),
         errors=result.get("errors", []),
         latency_ms=latency_ms,
-        api_key_alias=alias,
+        api_key_alias=auth.principal_alias(alias),
     )
     result["latency_ms"] = latency_ms
     return _json(result)
@@ -409,7 +409,7 @@ def http_judge():
         model=result.get("model", ""),
         latency_ms=latency_ms,
         cache_stats=result.get("cache_stats") or {},
-        api_key_alias=alias,
+        api_key_alias=auth.principal_alias(alias),
     )
     result["latency_ms"] = latency_ms
     return _json(result)
