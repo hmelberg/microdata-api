@@ -101,25 +101,35 @@ def http_auth_email_request():
     cross_site_session=False, enable_cors=True,
 )
 def http_auth_email_verify():
-    body = _load_body()
-    code = (body.get("code") or "").strip()
-    if not code:
-        return _json({"error": "missing code"}, status=400)
+    try:
+        body = _load_body()
+        code = (body.get("code") or "").strip()
+        if not code:
+            return _json({"error": "missing code"}, status=400)
 
-    email = auth.consume_magic_code(code)
-    if email is None:
-        return _json({"error": "invalid or expired code"}, status=400)
+        email = auth.consume_magic_code(code)
+        if email is None:
+            return _json({"error": "invalid or expired code"}, status=400)
 
-    user = auth.find_or_create_user(email, provider_kind="email_magic")
-    token, expires = auth.issue_session_token(
-        user, request_meta=auth._request_meta(anvil.server.request)
-    )
+        user = auth.find_or_create_user(email, provider_kind="email_magic")
+        token, expires = auth.issue_session_token(
+            user, request_meta=auth._request_meta(anvil.server.request)
+        )
 
-    return _json({
-        "token": token,
-        "expires_at": expires.isoformat(),
-        "user": _user_payload(user),
-    })
+        return _json({
+            "token": token,
+            "expires_at": expires.isoformat(),
+            "user": _user_payload(user),
+        })
+    except Exception as exc:
+        # Catch-all so the response always carries CORS headers. An uncaught
+        # exception otherwise returns Anvil's default 500 (no CORS), which
+        # the browser surfaces as "Failed to fetch".
+        try:
+            print(f"[auth/email/verify] failed: {exc!r}")
+        except Exception:
+            pass
+        return _json({"error": "verify failed: " + str(exc)[:200]}, status=500)
 
 
 # ---------------------------------------------------------------------------
