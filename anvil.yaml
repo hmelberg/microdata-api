@@ -109,6 +109,7 @@ renamed: true
 runtime_options:
   client_version: '3'
   legacy_features: {bootstrap3: true, class_names: true}
+  server_persist: true
   server_spec: {base: python310-datascience}
   server_spec_disabled: {base: python310-datascience}
   server_version: python3-full
