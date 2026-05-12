@@ -123,6 +123,8 @@ class MicroParser:
         # keep/drop/replace: betingelse kan ha komma (f.eks. inrange(alder, 16, 66))
         _no_comma_option_split = frozenset({
             'generate', 'recode', 'define-labels', 'keep', 'drop', 'replace',
+            # `for x in v1, v2, ...` har komma i iterator-listen, ikke opsjoner.
+            'for',
         })
         options_dict = {}
         first_word = line.split(maxsplit=1)[0].lower() if line else ''
@@ -211,7 +213,18 @@ class MicroParser:
 
         if cmd in ['import', 'import-event']:
             match = self.import_pattern.search(remainder)
-            return match.groupdict() if match else {"raw": remainder}
+            if not match:
+                return {"raw": remainder}
+            result = dict(match.groupdict())
+            # Detekter silent partial: `as <noe>` der <noe> ikke er en gyldig
+            # identifikator (typisk feilet bindings-interpolasjon).
+            m_as = re.search(r'\bas\s+(.+?)\s*$', remainder)
+            if m_as:
+                after = m_as.group(1).strip()
+                alias = result.get('alias') or ''
+                if after and after != alias:
+                    result['_alias_raw'] = after
+            return result
         if cmd == 'import-panel':
             # import-panel var1 var2 ... time1 time2 ...
             toks = remainder.split()
@@ -309,28 +322,67 @@ class MicroParser:
             return {"name": name.strip(), "expression": expr.strip()}
 
         if cmd == 'for':
-            # for var in val1 val2 ... | for var in start : end
+            # for vars in spec [; vars in spec ...]
+            #   vars       : én eller flere iteratorer separert med komma
+            #   spec       : enten "lo : hi" (range) eller en eller flere verdilister
+            #                (per iterator) separert med komma. Hver liste er
+            #                whitespace-separerte verdier (eller en range).
+            # Nøstede løkker: bruk `;` mellom nivåer.
             if ' in ' not in remainder:
                 return {"raw": remainder}
-            var_part, in_part = remainder.split(' in ', 1)
-            var_name = var_part.strip()
-            spec = in_part.strip()
-            # Range-syntaks: "lo : hi" eller "lo:hi" (med/uten mellomrom)
-            m_range = re.match(r'^\s*(-?\d+)\s*:\s*(-?\d+)\s*$', spec)
-            if m_range:
-                try:
-                    lo, hi = int(m_range.group(1)), int(m_range.group(2))
-                    return {"var": var_name, "values": list(range(lo, hi + 1))}
-                except ValueError:
-                    pass
-            vals = [t.strip() for t in spec.split()]
-            result = []
-            for v in vals:
-                try:
-                    result.append(int(v) if '.' not in v else float(v))
-                except ValueError:
-                    result.append(v)
-            return {"var": var_name, "values": result}
+            levels = []
+            for level_str in remainder.split(';'):
+                level_str = level_str.strip()
+                if not level_str:
+                    continue
+                if ' in ' not in level_str:
+                    return {"raw": remainder, "_for_error":
+                            f"manglende 'in' i for-nivå: '{level_str}'"}
+                vars_str, spec = level_str.split(' in ', 1)
+                var_names = [v.strip() for v in vars_str.split(',') if v.strip()]
+                if not var_names:
+                    return {"raw": remainder, "_for_error":
+                            "for-løkke mangler iteratornavn"}
+                spec = spec.strip()
+                if spec.startswith('(') and spec.endswith(')'):
+                    spec = spec[1:-1].strip()
+                # Top-level komma-split for multi-iterator. For single-iterator
+                # behandles hele spec som én verdiliste.
+                if len(var_names) > 1:
+                    value_strs = [v.strip() for v in spec.split(',') if v.strip()]
+                else:
+                    value_strs = [spec]
+                value_lists = []
+                for vs in value_strs:
+                    m_range = re.match(r'^\s*(-?\d+)\s*:\s*(-?\d+)\s*$', vs)
+                    if m_range:
+                        lo, hi = int(m_range.group(1)), int(m_range.group(2))
+                        value_lists.append(list(range(lo, hi + 1)))
+                        continue
+                    toks = [t for t in re.split(r'[\s,]+', vs) if t]
+                    converted = []
+                    for t in toks:
+                        if (t.startswith("'") and t.endswith("'")) or \
+                           (t.startswith('"') and t.endswith('"')):
+                            converted.append(t[1:-1])
+                            continue
+                        try:
+                            converted.append(int(t) if '.' not in t else float(t))
+                        except ValueError:
+                            converted.append(t)
+                    value_lists.append(converted)
+                if len(value_lists) != len(var_names):
+                    return {"raw": remainder, "_for_error":
+                            f"for-nivå '{vars_str.strip()}': {len(var_names)} "
+                            f"iteratorer men {len(value_lists)} verdilister"}
+                if value_lists and len({len(vl) for vl in value_lists}) > 1:
+                    return {"raw": remainder, "_for_error":
+                            f"for-nivå '{vars_str.strip()}': verdilistene må ha "
+                            f"samme lengde ({[len(vl) for vl in value_lists]})"}
+                levels.append({"vars": var_names, "values": value_lists})
+            if not levels:
+                return {"raw": remainder}
+            return {"levels": levels}
 
         if cmd == 'end':
             return {}  # Avslutter for-løkke
@@ -559,13 +611,14 @@ def _eval_int(x):
 
 
 try:
-    from functions import get_microdata_functions, set_label_manager, set_bindings
+    from functions import get_microdata_functions, set_label_manager, set_bindings, _bindings_ref
     _EVAL_LOCALS = {**get_microdata_functions(), 'np': np}
     _LET_EVAL_ENV = {k: v for k, v in _EVAL_LOCALS.items()}
     _LET_EVAL_ENV['__builtins__'] = {}
 except ImportError:
     set_label_manager = lambda lm: None
     set_bindings = lambda b: None
+    _bindings_ref = [None]
     _EVAL_LOCALS = {
         'np': np,
         'int': _eval_int,
@@ -796,6 +849,13 @@ def _py_eval_expr(df, expr):
     expr = _micro_expr_fixup(expr)
     # Bygg eval-miljø: kolonnenavn -> Series, microdata-funksjoner og np
     env = dict(_EVAL_LOCALS)
+    # Bindinger (fra `for`/`let`) tilgjengelig som bare identifikatorer i uttrykk.
+    # Lavere prioritet enn kolonner: legges inn først, kolonnene overskriver evt.
+    bindings = _bindings_ref[0]
+    if bindings:
+        for k, v in bindings.items():
+            if isinstance(k, str) and k.isidentifier():
+                env[k] = v
     # Kolonnenavn med @ (f.eks. date@panel) er ugyldige Python-identifikatorer.
     # Erstatt @ med _AT_ i både env-nøkler og uttrykket.
     at_cols = {}
@@ -2828,8 +2888,17 @@ class MockDataEngine:
                 result_df = result_df[keep_mask].reset_index(drop=True)
         return result_df
 
-import statsmodels.api as sm
-from statsmodels.discrete.discrete_model import Probit
+def _ensure_statsmodels():
+    """Lazy-import statsmodels. Bruker friendly error hvis ikke installert."""
+    try:
+        import statsmodels.api as sm
+        from statsmodels.discrete.discrete_model import Probit
+        return sm, Probit
+    except ImportError:
+        raise ImportError(
+            "statsmodels må være installert for regresjonskommandoer. "
+            "Kjør: pip install statsmodels"
+        )
 
 def calculate_gini(x):
     """Spesialfunksjon for microdata.no gini-koeffisient"""
@@ -2981,6 +3050,7 @@ _PERSONID_REF_VARS = frozenset({
     'ELHUB_PERS_MALEPUNKTID_FNR', 'KJORETOY_KJORETOYID_FNR',
     'TRAFULYK_PERS_FNR',
     'ARBEIDSFORHOLD_PERSON',
+    'NPRID',  # NPR person id — same encrypted PID as SSB PERSONID_1, lets cross-registry merges auto-detect.
 })
 
 # Hendelses-profil for import-event variabler.
@@ -3126,7 +3196,7 @@ def _get_df_key_col(df):
     if df is None:
         return None
     for c in ('PERSONID_1', 'ARBEIDSFORHOLD_ID', 'KJORETOY_ID',
-              'NUDB_KURS_LOEPENR', 'AGGRSHOPPID', 'unit_id'):
+              'NUDB_KURS_LOEPENR', 'AGGRSHOPPID', 'NPRID', 'unit_id'):
         if c in df.columns:
             return c
     return None
@@ -4171,6 +4241,7 @@ class StatsEngine:
 
 class RegressionHandler:
     def _add_const(self, X, add):
+        sm, _ = _ensure_statsmodels()
         return sm.add_constant(X) if add else X
 
     def _apply_cov(self, model, options, df_clean=None):
@@ -4241,6 +4312,7 @@ class RegressionHandler:
         """Fit en enkel regresjon og returner (model, dep_var, indep_vars, df_clean).
         Brukes av coefplot og evt. andre metoder som trenger råmodellen.
         """
+        sm, Probit = _ensure_statsmodels()
         dep_var = args[0]
         raw_indep = list(args[1:])
         add_const = 'noconstant' not in options
@@ -4314,6 +4386,7 @@ class RegressionHandler:
             return self._execute_iv(cmd, df, args, options)
         if cmd == 'rdd':
             return self._execute_rdd(cmd, df, args, options)
+        sm, Probit = _ensure_statsmodels()
 
         dep_var = args[0]
         raw_indep = list(args[1:])
@@ -4668,6 +4741,7 @@ class RegressionHandler:
         return (f"Ukjent regresjonskommando: {cmd}", None)
 
     def _execute_iv(self, cmd, df, args, options):
+        sm, _ = _ensure_statsmodels()
         alpha = 1 - (float(options.get('level', 95)) / 100)
         dep = args.get('dep')
         exog_vars = args.get('exog', [])
@@ -4735,6 +4809,7 @@ class RegressionHandler:
 
     def _execute_rdd(self, cmd, df, args, options):
         """Regression Discontinuity Design (sharp og fuzzy)."""
+        sm, _ = _ensure_statsmodels()
         dep = args.get('dep')
         runvar = args.get('runvar')
         raw_exog = args.get('exog', [])
@@ -5835,29 +5910,166 @@ class MicroInterpreter:
         except Exception:
             return None
 
+    def _binding_eval_env(self):
+        """Bygg miljø for bindings-uttrykk: microdata-funksjoner + nåværende bindinger."""
+        env = dict(_LET_EVAL_ENV)
+        if self.bindings:
+            for k, v in self.bindings.items():
+                if isinstance(k, str) and k.isidentifier():
+                    env[k] = v
+        return env
+
+    _BINDING_FUNCS = ('to_str', 'to_symbol', 'to_int', 'bind', 'date_fmt')
+
+    def _split_pp_top_level(self, text):
+        """Splitt på `++` på topp-nivå (utenfor parenteser og anførselstegn)."""
+        parts = []
+        paren = 0
+        quote = None
+        start = 0
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if quote:
+                if ch == quote and (i == 0 or text[i - 1] != '\\'):
+                    quote = None
+                i += 1
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+                i += 1
+                continue
+            if ch in '([':
+                paren += 1
+            elif ch in ')]':
+                paren -= 1
+            elif paren == 0 and ch == '+' and i + 1 < n and text[i + 1] == '+':
+                parts.append(text[start:i])
+                i += 2
+                start = i
+                continue
+            i += 1
+        parts.append(text[start:])
+        return parts
+
+    def _eval_pp_operand(self, operand, env):
+        """Evaluer ett ledd i en `++`-kjede. Ukjente symboler beholdes som streng."""
+        s = operand.strip()
+        if not s:
+            return ''
+        # Anførselstegn-streng
+        if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+            return s[1:-1]
+        # Python-eval (aritmetikk, funksjonskall, navneoppslag fra bindinger)
+        try:
+            val = eval(s, {'__builtins__': {}}, env)
+            if isinstance(val, float) and val == int(val):
+                return str(int(val))
+            return str(val)
+        except Exception:
+            return s  # behold som symbol-literal (inkl. `@`, `_`, osv.)
+
+    # Topp-nivå strukturelle skiller i en kommandolinje. `++`-kjeder
+    # krysser ikke disse. Whitespace rundt ord-skiller (if/as/to) er nødvendig.
+    _STRUCT_DELIM_RE = re.compile(r'(\s+if\s+|\s+as\s+|\s+to\s+|==|!=|<=|>=|=|,|;)')
+
+    def _process_pp_in_line(self, text):
+        """Finn `++`-kjeder på topp-nivå (mellom strukturelle skiller) og evaluer."""
+        if '++' not in text:
+            return text
+        # Walk text, identifiser topp-nivå skiller. Innenfor hver segment,
+        # evaluer `++`-kjeder hvis de finnes på topp-nivå (utenfor parens/quotes).
+        out_parts = []
+        seg_start = 0
+        paren = 0
+        quote = None
+        i = 0
+        n = len(text)
+        env = None  # lazy
+        def _emit_segment(seg):
+            nonlocal env
+            if '++' not in seg:
+                return seg
+            parts = self._split_pp_top_level(seg)
+            if len(parts) <= 1:
+                return seg
+            if env is None:
+                env = self._binding_eval_env()
+            leading = seg[:len(seg) - len(seg.lstrip())]
+            trailing = seg[len(seg.rstrip()):]
+            joined = ''.join(self._eval_pp_operand(p, env) for p in parts)
+            return leading + joined + trailing
+        while i < n:
+            ch = text[i]
+            if quote:
+                if ch == quote and (i == 0 or text[i - 1] != '\\'):
+                    quote = None
+                i += 1
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+                i += 1
+                continue
+            if ch in '([':
+                paren += 1
+                i += 1
+                continue
+            if ch in ')]':
+                paren -= 1
+                i += 1
+                continue
+            if paren == 0:
+                m = self._STRUCT_DELIM_RE.match(text, i)
+                if m:
+                    out_parts.append(_emit_segment(text[seg_start:i]))
+                    out_parts.append(m.group(0))
+                    seg_start = m.end()
+                    i = m.end()
+                    continue
+            i += 1
+        out_parts.append(_emit_segment(text[seg_start:]))
+        return ''.join(out_parts)
+
     def _substitute_bindings(self, text):
-        """Erstatt $name med bindings[name] i tekst. Ukjente beholdes som $name.
-        Kollapser også `ident++ident` (streng-konkat) til sammenhengende identifikator.
-        Inline date_fmt(y[,m[,d]]) med numeriske argumenter evalueres til YYYY-MM-DD."""
+        """Erstatt bindings-syntaks i tekst før parsing:
+          - ${expr}  : evaluer expr som bindings-uttrykk (microdata-funksjoner + bindinger).
+          - $name    : tekstlig substitusjon fra bindings (ukjente beholdes).
+          - a ++ b   : bindings-konkat på topp-nivå. Hver del evalueres som
+                       Python-uttrykk med bindings + microdata-funksjoner i miljøet
+                       (støtter aritmetikk: `lønn ++ $i - 2000 ++ "_2"`); ledd som
+                       ikke er gyldig Python behandles som symbol-literal (f.eks.
+                       `START@`).
+          - Inline date_fmt(...) med bindings/aritmetikk i argumenter.
+        """
         if not isinstance(text, str):
             return text
-        def repl(m):
+        # 1) ${expr} — vilkårlig bindings-uttrykk
+        def _braces(m):
+            inner = m.group(1).strip()
+            try:
+                val = eval(inner, {'__builtins__': {}}, self._binding_eval_env())
+                if isinstance(val, float) and val == int(val):
+                    return str(int(val))
+                return str(val)
+            except Exception:
+                return m.group(0)
+        text = re.sub(r'\$\{([^}]+)\}', _braces, text)
+        # 2) $name
+        def _dollar(m):
             name = m.group(1)
             return str(self.bindings[name]) if name in self.bindings else m.group(0)
-        text = re.sub(r'\$([\wøæåØÆÅ]+)', repl, text)
-        # Kollaps `ident ++ ident` eller `ident++ident` til `identident` (microdata ++ konkat)
-        text = re.sub(r'([\wøæåØÆÅ])\s*\+\+\s*(?=[\wøæåØÆÅ])', r'\1', text)
-        # Inline date_fmt(y[,m[,d]]) → YYYY-MM-DD (kun når alle argumenter er heltallsliteraler)
+        text = re.sub(r'\$([\wøæåØÆÅ]+)', _dollar, text)
+        # 3) `++` bindings-uttrykk per topp-nivå segment
+        text = self._process_pp_in_line(text)
+        # 4) Inline date_fmt(...) — evalueres som funksjonskall med bindings-env
         def _eval_date_fmt(m):
-            args = [a.strip() for a in m.group(1).split(',')]
             try:
-                y = int(args[0])
-                mo = int(args[1]) if len(args) > 1 else 1
-                d = int(args[2]) if len(args) > 2 else 1
-                return f"{y:04d}-{mo:02d}-{d:02d}"
-            except (ValueError, IndexError):
+                val = eval(m.group(0), {'__builtins__': {}}, self._binding_eval_env())
+                return str(val)
+            except Exception:
                 return m.group(0)
-        text = re.sub(r'date_fmt\(([^)]+)\)', _eval_date_fmt, text)
+        text = re.sub(r'date_fmt\(([^()]+)\)', _eval_date_fmt, text)
         return text
 
     @property
@@ -5893,7 +6105,7 @@ class MicroInterpreter:
                     self._log(prefix + stripped, indent=False)
 
             # for/end: samle løkkebody og iterer
-            if cmd == 'for' and isinstance(args, dict) and 'var' in args and 'values' in args:
+            if cmd == 'for' and isinstance(args, dict) and 'levels' in args:
                 body_lines = []
                 j = i + 1
                 while j < len(lines):
@@ -5903,15 +6115,43 @@ class MicroInterpreter:
                         break
                     body_lines.append(lines[j])
                     j += 1
-                for val in args['values']:
-                    self.bindings[args['var']] = val
-                    for bl in body_lines:
-                        bl_sub = self._substitute_bindings(bl)
-                        bi = self.parser.parse_line(bl_sub)
-                        if bi and bi['command'] != 'end':
-                            self._execute_instruction(bi)
-                    if _yield_fn:
-                        _yield_fn()
+                outer_bindings = dict(self.bindings)
+                try:
+                    levels = args['levels']
+                    def _step(lvl_idx):
+                        if lvl_idx >= len(levels):
+                            for bl in body_lines:
+                                bl_sub = self._substitute_bindings(bl)
+                                bi = self.parser.parse_line(bl_sub)
+                                if bi and bi['command'] != 'end':
+                                    self._execute_instruction(bi)
+                            if _yield_fn:
+                                _yield_fn()
+                            return
+                        lvl = levels[lvl_idx]
+                        var_names = lvl['vars']
+                        value_lists = lvl['values']
+                        n = len(value_lists[0]) if value_lists else 0
+                        for k in range(n):
+                            for vn, vl in zip(var_names, value_lists):
+                                self.bindings[vn] = vl[k]
+                            _step(lvl_idx + 1)
+                    _step(0)
+                finally:
+                    # Lokalt scope: iterator- og inner let-bindinger forsvinner
+                    self.bindings.clear()
+                    self.bindings.update(outer_bindings)
+                i = j + 1
+                continue
+            if cmd == 'for' and isinstance(args, dict) and args.get('_for_error'):
+                self._log(f"FEIL: {args['_for_error']}")
+                # Hopp over løkkebody fram til end
+                j = i + 1
+                while j < len(lines):
+                    sub_instr = self.parser.parse_line(self._substitute_bindings(lines[j]))
+                    if sub_instr and sub_instr['command'] == 'end':
+                        break
+                    j += 1
                 i = j + 1
                 continue
             if cmd == 'end':
@@ -5969,7 +6209,7 @@ class MicroInterpreter:
                     prefix = f"{self.active_name} >> " if self.active_name else ">> "
                     self._log(prefix + stripped, indent=False)
 
-            if cmd == 'for' and isinstance(args, dict) and 'var' in args and 'values' in args:
+            if cmd == 'for' and isinstance(args, dict) and 'levels' in args:
                 body_lines = []
                 j = i + 1
                 while j < len(lines):
@@ -5979,16 +6219,42 @@ class MicroInterpreter:
                         break
                     body_lines.append(lines[j])
                     j += 1
-                for val in args['values']:
-                    self.bindings[args['var']] = val
-                    for bl in body_lines:
-                        bl_sub = self._substitute_bindings(bl)
-                        bi = self.parser.parse_line(bl_sub)
-                        if bi and bi['command'] != 'end':
-                            self._execute_instruction(bi)
-                            _cmd_count += 1
-                    # Yield til nettleseren etter hver loop-iterasjon
-                    await asyncio.sleep(0)
+                outer_bindings = dict(self.bindings)
+                try:
+                    levels = args['levels']
+                    async def _step(lvl_idx):
+                        nonlocal _cmd_count
+                        if lvl_idx >= len(levels):
+                            for bl in body_lines:
+                                bl_sub = self._substitute_bindings(bl)
+                                bi = self.parser.parse_line(bl_sub)
+                                if bi and bi['command'] != 'end':
+                                    self._execute_instruction(bi)
+                                    _cmd_count += 1
+                            await asyncio.sleep(0)
+                            return
+                        lvl = levels[lvl_idx]
+                        var_names = lvl['vars']
+                        value_lists = lvl['values']
+                        n = len(value_lists[0]) if value_lists else 0
+                        for k in range(n):
+                            for vn, vl in zip(var_names, value_lists):
+                                self.bindings[vn] = vl[k]
+                            await _step(lvl_idx + 1)
+                    await _step(0)
+                finally:
+                    self.bindings.clear()
+                    self.bindings.update(outer_bindings)
+                i = j + 1
+                continue
+            if cmd == 'for' and isinstance(args, dict) and args.get('_for_error'):
+                self._log(f"FEIL: {args['_for_error']}")
+                j = i + 1
+                while j < len(lines):
+                    sub_instr = self.parser.parse_line(self._substitute_bindings(lines[j]))
+                    if sub_instr and sub_instr['command'] == 'end':
+                        break
+                    j += 1
                 i = j + 1
                 continue
             if cmd == 'end':
@@ -6044,7 +6310,7 @@ class MicroInterpreter:
             args = instr['args']
             opts = instr.get('options') or {}
 
-            if cmd == 'for' and isinstance(args, dict) and 'var' in args and 'values' in args:
+            if cmd == 'for' and isinstance(args, dict) and 'levels' in args:
                 body_lines = []
                 j = i + 1
                 while j < len(lines):
@@ -6053,16 +6319,22 @@ class MicroInterpreter:
                         break
                     body_lines.append(lines[j])
                     j += 1
-                var = args['var']
-                vals = args['values']
-                out.append(f'# for {var} in {vals}')
-                out.append(f'for {var} in {repr(vals)}:')
+                levels = args['levels']
+                indent = ''
+                for lvl in levels:
+                    vars_str = ', '.join(lvl['vars'])
+                    if len(lvl['vars']) == 1:
+                        out.append(f'{indent}for {vars_str} in {repr(lvl["values"][0])}:')
+                    else:
+                        zip_args = ', '.join(repr(vl) for vl in lvl['values'])
+                        out.append(f'{indent}for {vars_str} in zip({zip_args}):')
+                    indent += '    '
                 for bl in body_lines:
                     sub_instr = self.parser.parse_line(self._substitute_bindings(bl))
                     if not sub_instr or sub_instr['command'] == 'end':
                         continue
                     for py_line in self._emit_python_instruction(sub_instr, active_name):
-                        out.append('    ' + py_line)
+                        out.append(indent + py_line)
                 i = j + 1
                 continue
             if cmd == 'end':
@@ -6279,6 +6551,27 @@ class MicroInterpreter:
         cond = instr['condition']
 
         try:
+            # 0. Validér identifikatorer som ofte feiler stille når brukeren
+            # prøver bindings-interpolasjon med feil syntaks.
+            if cmd == 'generate' and isinstance(args, dict):
+                _tgt = (args.get('target') or '').strip()
+                if _tgt and not re.fullmatch(r'[\wøæåØÆÅ]+', _tgt):
+                    self._log(
+                        f"FEIL: ugyldig variabelnavn '{_tgt}' i generate. "
+                        "Bruk $navn, ${navn}, eller navn ++ to_str(navn) "
+                        "for å interpolere bindinger."
+                    )
+                    return
+            if cmd in ('import', 'import-event') and isinstance(args, dict):
+                _raw_alias = args.get('_alias_raw')
+                if _raw_alias and not re.fullmatch(r'[\wøæåØÆÅ]+', _raw_alias):
+                    self._log(
+                        f"FEIL: ugyldig alias '{_raw_alias}' i {cmd}. "
+                        "Bruk $navn, ${navn}, eller navn ++ to_str(navn) "
+                        "for å interpolere bindinger."
+                    )
+                    return
+
             # 1. Globale/Sesjons-kommandoer
             if cmd == 'create-dataset':
                 self.datasets[args[0]] = pd.DataFrame()
@@ -6603,9 +6896,33 @@ class MicroInterpreter:
                 opts_copy['_condition'] = cond
                 if cond:
                     opts_copy['_condition_mask'] = self._eval_condition_mask(df_target, cond)
+                _row_filter = (
+                    cmd in ('keep', 'drop')
+                    and (
+                        cond is not None
+                        or (isinstance(args, dict) and args.get('mode') == 'if')
+                    )
+                )
+                _n_before = len(df_target) if _row_filter else None
                 result = self.transform_handler.execute(cmd, df_target, args, opts_copy)
                 if result is not None:
                     self.datasets[self.active_name] = result
+                if _row_filter and result is not None:
+                    _n_after = len(result)
+                    try:
+                        _b = f"{_n_before:,}".replace(",", " ")
+                        _a = f"{_n_after:,}".replace(",", " ")
+                    except Exception:
+                        _b, _a = str(_n_before), str(_n_after)
+                    if cmd == 'keep':
+                        self._log(f"({_a} av {_b} observasjoner beholdt)")
+                    else:  # drop
+                        _d = _n_before - _n_after
+                        try:
+                            _ds = f"{_d:,}".replace(",", " ")
+                        except Exception:
+                            _ds = str(_d)
+                        self._log(f"({_ds} av {_b} observasjoner droppet)")
                 return
 
             # 2a. Sample (tilfeldig uttrekk) – sample count|fraction seed
