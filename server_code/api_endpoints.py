@@ -24,6 +24,7 @@ import retrieval
 import utils
 import validation
 import auth
+import m2py_shim
 
 
 def _json(body: dict, status: int = 200) -> HttpResponse:
@@ -409,6 +410,107 @@ def http_judge():
         model=result.get("model", ""),
         latency_ms=latency_ms,
         cache_stats=result.get("cache_stats") or {},
+        api_key_alias=auth.principal_alias(alias),
+    )
+    result["latency_ms"] = latency_ms
+    return _json(result)
+
+
+# ---------------------------------------------------------------------------
+# /translate  (microdata → Python, ingen kjøring)
+
+
+@anvil.server.http_endpoint("/translate", methods=["POST"], cross_site_session=False, enable_cors=True)
+def http_translate():
+    """Oversett et microdata-script til ekvivalent Python-kode.
+
+    Body: {"script": "<microdata-script>"}
+    Returnerer: {"python": "<python-kode>", "latency_ms": int}
+    Ved feil: {"error": "<melding>", "latency_ms": int}
+    """
+    alias, err = _authenticate_or_fail()
+    if err:
+        return err
+    body = _load_body()
+    script = body.get("script") or ""
+    if not script:
+        return _json({"error": "missing 'script'"}, status=400)
+
+    t0 = time.time()
+    try:
+        python = m2py_shim.translate(script)
+        result = {"python": python}
+    except Exception as exc:
+        result = {"error": f"{type(exc).__name__}: {exc}"}
+    latency_ms = int((time.time() - t0) * 1000)
+    utils.log_request(
+        endpoint="/translate",
+        question="",
+        lang="",
+        model="",
+        script=script,
+        latency_ms=latency_ms,
+        api_key_alias=auth.principal_alias(alias),
+    )
+    result["latency_ms"] = latency_ms
+    return _json(result)
+
+
+# ---------------------------------------------------------------------------
+# /run  (kjør mot syntetisk data, returner output_log + dataset-sammendrag)
+
+
+@anvil.server.http_endpoint("/run", methods=["POST"], cross_site_session=False, enable_cors=True)
+def http_run():
+    """Kjør et microdata-script mot MockDataEngine og returner resultatet.
+
+    Body: {
+        "script":   "<microdata-script>",
+        "max_rows": int (valgfri, default = MockDataEngine sin default),
+        "echo":     bool (valgfri, default true — inkluder kommando-echo i output)
+    }
+    Returnerer: {
+        "output":    str,            # join(output_log)
+        "datasets":  [{"name", "n_rows", "columns"}],
+        "error":     str | null,     # exception-melding hvis kjøringen brøt
+        "latency_ms": int
+    }
+
+    Merk: dette kjører mot syntetisk data fra MockDataEngine — ingen ekte
+    microdata-data er tilgjengelig på serveren. Anvils 30s HTTP-cap gjelder;
+    bruk lavere `max_rows` for tunge skript.
+    """
+    alias, err = _authenticate_or_fail()
+    if err:
+        return err
+    body = _load_body()
+    script = body.get("script") or ""
+    if not script:
+        return _json({"error": "missing 'script'"}, status=400)
+    max_rows = body.get("max_rows")
+    echo = bool(body.get("echo", True))
+
+    t0 = time.time()
+    try:
+        result = m2py_shim.run_with_summary(
+            script,
+            max_rows=int(max_rows) if max_rows is not None else None,
+            echo_commands=echo,
+        )
+    except Exception as exc:
+        # Infrastruktur-feil (kunne ikke laste interpreter osv.)
+        result = {"output": "", "datasets": [], "error": f"{type(exc).__name__}: {exc}"}
+    latency_ms = int((time.time() - t0) * 1000)
+    utils.log_request(
+        endpoint="/run",
+        question="",
+        lang="",
+        model="",
+        script=script,
+        validation_passed=(result.get("error") is None),
+        validation_tier="run",
+        errors=[{"kind": "runtime", "message": result["error"]}] if result.get("error") else [],
+        latency_ms=latency_ms,
         api_key_alias=auth.principal_alias(alias),
     )
     result["latency_ms"] = latency_ms

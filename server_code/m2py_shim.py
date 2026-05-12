@@ -39,3 +39,59 @@ def get_interpreter_cls():
 
 def make_parser() -> MicroParser:
     return MicroParser()
+
+
+# ─── Høynivå-hjelpere brukt av /translate og /run ────────────────────────────
+
+def translate(script: str) -> str:
+    """Oversett microdata-script til ekvivalent Python uten å kjøre.
+
+    Bruker MicroInterpreter.translate_script_to_python — emittering, ikke
+    eksekvering, så pandas/numpy lastes ikke før noen ber om kjøring.
+    """
+    InterpreterCls = get_interpreter_cls()
+    interp = InterpreterCls(echo_commands=False)
+    return interp.translate_script_to_python(script)
+
+
+def run_with_summary(script: str, max_rows: int | None = None,
+                     echo_commands: bool = True) -> dict:
+    """Kjør scriptet mot MockDataEngine og returner output + dataset-info.
+
+    Returnerer en dict:
+        {
+          "output": str,           # `output_log` joinet med newline
+          "datasets": [            # ett oppslag per datasett etterpå
+            {"name": str, "n_rows": int, "columns": [str, ...]},
+            ...
+          ],
+          "error": Optional[str],  # exception-melding hvis kjøringen brøt
+        }
+
+    `max_rows` overstyrer MockDataEngine.default_rows (syntetisk data).
+    Ingen ekte microdata-data blir berørt; serveren har kun mock-data.
+    """
+    InterpreterCls = get_interpreter_cls()
+    interp = InterpreterCls(echo_commands=echo_commands)
+    if max_rows is not None and hasattr(interp, "data_engine"):
+        try:
+            interp.data_engine.default_rows = int(max_rows)
+        except Exception:
+            pass
+    error: str | None = None
+    try:
+        interp.run_script(script)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    output = "\n".join(getattr(interp, "output_log", []) or [])
+    datasets: list[dict] = []
+    for name, df in getattr(interp, "datasets", {}).items():
+        try:
+            datasets.append({
+                "name": str(name),
+                "n_rows": int(len(df)),
+                "columns": [str(c) for c in df.columns],
+            })
+        except Exception:
+            continue
+    return {"output": output, "datasets": datasets, "error": error}
