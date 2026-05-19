@@ -85,9 +85,29 @@ GRAMMAR_CHEATSHEET = """\
   literally named `panel@date` — note the `panel@` prefix, NOT `date@panel`).
   After reshape-to-panel you may use `tabulate-panel`, `regress-panel`,
   `transitions-panel`.
-- Aggregation: `collapse (stat) var -> new_name [, by(...)]`.
+- Aggregation: `collapse (stat) var -> new_name [, by(<single_var>)]`.
+  Valid stats: `count`, `sum`, `mean`, `sd`, `median`, `min`, `max`,
+  `p25`, `p75`, `gini`, `iqr`, `percent`. **`first`/`last` do NOT exist
+  in microdata.no — never emit them.** Only ONE variable allowed in
+  `by(...)`; for composite grouping, build a key first:
+  `generate k = string(a) ++ "_" ++ string(b)` then
+  `collapse (mean) inntekt, by(k)`.
 - Filter: `keep if <cond>`, `drop if <cond>`.
-- Loops: `for i in (a b c) { ... } end` or `for-each x in a b c { body }`.
+- Loops: `for <i> [, <j>] in <values> [; <g> in ...] ... end`.
+  `<values>` is either a range `lo : hi` (inclusive) or a list of
+  values (whitespace- or comma-separated). String values are written
+  bare — quotes are NOT required and should be omitted unless a value
+  would collide with a reserved word. Use `$i` (or `${expr}` for
+  arithmetic) to substitute the iterator value. Close every loop with
+  `end`. **Do NOT use literal parens around the value list, and do NOT
+  use literal ellipsis `...`** — neither is valid microdata.no syntax.
+  - ✅ `for år in 1998 : 2009`
+  - ✅ `for forelder in mor, far`
+  - ✅ `for år, v in 0:2, første andre tredje`
+  - ✅ `for år in 1998 : 2009 ; sted in indre ytre`  (nested)
+  - ❌ `for år in (1998, 1999, 2000)`  (parens not allowed)
+  - ❌ `for år in 1998, ..., 2009`     (ellipsis not allowed)
+  - ❌ `for år in 1998 2009 { ... }`   (no braces — use `end`)
 - **Missing values**: use `sysmiss(x)` (returns 1 if x is system-missing,
   else 0) — NOT `x == .` (Stata syntax, not supported). Negate with
   `!sysmiss(x)`. Examples: `drop if sysmiss(income)`,
@@ -141,6 +161,11 @@ DATE_QUIRKS = """\
 
 - Many SSB date variables are stored as **integers**, not ISO date strings:
     - `BEFOLKNING_FOEDSELS_AAR_MND` is `YYYYMM` (e.g. `198403` = March 1984)
+    - `NUDB_AAR_FORSTE_REG_UH` is `YYYYMM` (e.g. `200908` = Aug 2009) —
+      NOT plain year `YYYY`. Filtering with `keep if uh <= 2009` will drop
+      EVERY row because all values look like `1995xx`, `2010xx`. Use
+      `keep if uh <= 200912` or extract the year:
+      `generate uh_year = int(uh/100)`.
     - Some others are `YYYYMMDD` (e.g. `20220115`)
 - Extract the year with `gen year = int(date_var/10000)` (for YYYYMMDD)
   or `gen year = int(date_var/100)` (for YYYYMM).
@@ -148,6 +173,70 @@ DATE_QUIRKS = """\
   1970-01-01.
 - Catalog metadata `data_type` tells you the format: `date:yyyymm`,
   `date:yyyymmdd`, or `int` (with description noting the convention).
+"""
+
+
+PSEUDONYM_RULES = """\
+## Pseudonym variables — keys only, never analysis
+
+Variables that identify individuals are stored as encrypted pseudonyms.
+They look like ordinary integers in the catalog, but the platform refuses
+to treat them as numbers in any analysis or transformation context.
+
+**Naming convention:** variables whose names end in `_FNR` are pseudonyms.
+Examples: `BEFOLKNING_EKT_FNR`, `BEFOLKNING_MOR_FNR`, `BEFOLKNING_FAR_FNR`,
+`NUDB_KURS_FNR`, `KJORETOY_KJORETOYID_FNR`, `TRAFULYK_PERS_FNR`. Treat any
+other variable flagged as `is_pseudonym` or `microdata_datatype = Pseudonym`
+the same way.
+
+**Allowed uses:**
+- As the `by()` key in `collapse` / `aggregate`:
+  `collapse (count) admission -> n, by(NUDB_KURS_FNR)`
+- As the `on` key in `merge`:
+  `merge n into personer on NUDB_KURS_FNR`
+
+**Forbidden uses (the script will fail in microdata.no):**
+- `generate x = BEFOLKNING_MOR_FNR + 1`          // arithmetic on FNR
+- `replace tag = 1 if BEFOLKNING_EKT_FNR > 0`    // comparison on FNR
+- `string(BEFOLKNING_FAR_FNR)`                   // casting
+- `sysmiss(BEFOLKNING_MOR_FNR)`                  // missing-test
+- `summarize BEFOLKNING_EKT_FNR`                 // descriptive stats
+- `collapse (mean) BEFOLKNING_MOR_FNR`           // FNR as data variable
+- `tabulate BEFOLKNING_FAR_FNR`                  // frequency table
+- `regress y BEFOLKNING_EKT_FNR x1`              // explanatory variable
+
+If you need to know whether a person has a parent, sibling, or spouse in
+the data, use `sysmiss()` on a **non-pseudonym** attribute (e.g. mother's
+birth year `BEFOLKNING_MOR_FOEDSELS_AAR_MND`), or build a flag in the
+parent record dataset and merge it in.
+"""
+
+
+TYPE_RULES = """\
+## Alphanumeric vs numeric variables
+
+The catalog metadata field `microdata_datatype` tells you whether a
+variable is numeric or alphanumeric in microdata.no. Variables marked
+`Alfanumerisk` are strings — even if they look like numbers (e.g. kommune
+codes, `BEFOLKNING_KJOENN`). The platform rejects numeric operations on
+them.
+
+**Forbidden on `Alfanumerisk` variables:**
+- `min`, `max`, `mean`, `sum`, `sd`, `median`, percentiles (in `summarize`
+  or `collapse`)
+- Arithmetic and numeric comparisons (`<`, `>`, `+`, `-`, `*`, `/`)
+- `regress`/`logit`/`probit` with the alphanumeric var on either side
+- `histogram <alphanum>` without `, discrete`
+
+**Allowed on `Alfanumerisk` variables:**
+- `tabulate` (frequencies)
+- `count` in `collapse`
+- Equality comparisons (`==`, `!=`) against string literals
+- `by()` / `on` keys
+
+If the user wants a numeric analysis of an alphanumeric variable, either
+recode it to numeric explicitly (`recode kjonn (1 = 0) (2 = 1)`) or
+suggest `tabulate` instead.
 """
 
 
@@ -185,11 +274,23 @@ source by a NPR/FNR person-ref alias (e.g. `collapse ... by(pid)`), the
 platform also auto-detects the link to PERSONID_1 in the target — but it is
 clearer to always pass `on <alias>` explicitly.
 
+**Only ONE variable allowed in `on <key>`.** Multi-key joins (e.g.
+`on (k1 k2)` or `on k1 k2`) are NOT supported. For composite joins, build
+a single key first:
+
+    use src
+    generate composite = string(k1) ++ "_" ++ string(k2)
+    use tgt
+    generate composite = string(k1) ++ "_" ++ string(k2)
+    use src
+    merge somevar into tgt on composite
+
 **Common mistakes — DO NOT WRITE:**
 
 - `merge astma from npr_astma on pid` — the `from` syntax does not exist
 - `merge ... into personer` while `personer` is the active dataset — you'd
   be merging from itself; switch with `use <other_name>` first
+- `merge x into ds on k1 k2` — multi-key not supported; build composite key
 
 **Canonical NPR→person merge pattern:**
 
@@ -544,6 +645,8 @@ def cached_prefix() -> str:
                     build_entity_links_block(),
                     NPR_CANONICAL_IMPORTS,
                     MERGE_CHEATSHEET,
+                    PSEUDONYM_RULES,
+                    TYPE_RULES,
                     DATE_QUIRKS,
                     PRIVACY_RULES,
                     build_full_catalog_block(),
