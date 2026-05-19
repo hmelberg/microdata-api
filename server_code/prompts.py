@@ -124,15 +124,52 @@ If you import a Time-Varying variable without a date, the script will fail.
 
 
 PRIVACY_RULES = """\
-## Privacy guardrails (microdata.no enforces these)
+## Privacy guardrails / disclosure control (microdata.no enforces these)
 
-- **Never use:** `list`, `browse`, `print`, `head`, `tail`, `show`. These
-  would expose individual rows and the platform forbids them.
-- `tabulate` automatically hides cells where the count would identify
-  individuals (the platform suppresses output if more than ~50% of cells
-  have count < 5). Prefer aggregation over enumeration.
-- For continuous variables, use `summarize` (returns mean/sd/quantiles, not
-  individual values).
+The platform enforces specific numeric thresholds. A script that triggers
+any of them STOPS with an error — it does not silently degrade. Plan
+around them: e.g. don't filter to a sub-population of 50, don't generate
+a flag that only 3 rows satisfy.
+
+**Inspection forbidden:** never use `list`, `browse`, `print`, `head`,
+`tail`, `show`. These would expose individual rows.
+
+**T1 — Min 1000 enheter per populasjon.** After `keep if`, `drop if`, or
+`sample`, the active dataset must still have ≥ 1000 rows. If your filter
+would leave a smaller population, the platform refuses. Plan your
+filters so the resulting `n` clearly clears 1000.
+
+**T5 — Sparse tables hidden.** `tabulate` suppresses its output if more
+than 50% of cells have a frequency < 5. To avoid this, use coarser
+categories (e.g. age bands instead of single years) or grow the
+population. Two-way tables with many small categories are especially
+prone to this.
+
+**T6 — Changes must affect ≥ 10 rows (or all, or none).**
+`generate`, `replace`, `recode` are blocked if they would affect 1–9
+rows, OR if they would leave only 1–9 rows unchanged. So
+`replace x = 1 if alder == 17` will fail if there are fewer than 10
+17-year-olds in the dataset. Allowed: changes that affect every row
+or none. Build flags with sufficient prevalence:
+`generate ung = (alder < 30)` is fine; `generate ekstrem = (alder == 99)`
+on a dataset with 4 such rows will fail.
+
+**T7 — `summarize` requires ≥ 10 obs.** `summarize`, `correlate`, `ci`,
+`anova`, and `normaltest` are blocked on populations smaller than 10.
+`tabulate` (frequencies) is exempt. If a question only makes sense on a
+small group, suggest broadening the group or using a frequency table
+instead.
+
+**T8 — Medians and percentiles rounded to 3 significant digits.** In
+`summarize` output, the 1%/25%/50%/75%/99% columns are rounded
+(47238 → 47200, 2.7183 → 2.72). Mean and SD are NOT rounded. Don't
+write scripts that depend on percentile precision below 3 sig figs.
+
+**Pseudonyms:** see the Pseudonym rules section — `_FNR` variables are
+keys only.
+
+**For continuous variables**, prefer `summarize` (returns mean/sd/
+quantiles, not individual values).
 """
 
 
