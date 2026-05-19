@@ -88,18 +88,23 @@ GRAMMAR_CHEATSHEET = """\
 - Aggregation: `collapse (stat) var -> new_name [, by(...)]`.
 - Filter: `keep if <cond>`, `drop if <cond>`.
 - Loops: `for i in (a b c) { ... } end` or `for-each x in a b c { body }`.
-- **Missing values**: the literal `.` (Stata's missing-value token) is
-  NOT valid anywhere in microdata.no. Never emit `generate x = .`,
-  `x == .`, `x != .`, `if y == .`, etc. — the platform rejects them.
-  - To *test* if a value is missing: `sysmiss(x)` returns 1 if missing,
-    else 0. Negate with `!sysmiss(x)`.
-    Examples: `drop if sysmiss(income)`, `replace flag = 0 if sysmiss(flag)`.
-  - To *produce* missing values: use the `if cond` form. Rows that
-    don't match the condition get missing automatically:
+- **Missing values**: the literal `.` (Stata's missing-value token)
+  is allowed only in ASSIGNMENT; it is NOT allowed in comparisons.
+  - ✅ Assignment OK: `generate x = .`, `replace x = . if cond`
+    (initialises or sets the variable to missing for the matching
+    rows).
+  - ❌ Comparison NOT OK: `x == .`, `x != .`, `if y == .`,
+    `keep if income == .`. The platform rejects these.
+  - To *test* if a value is missing: `sysmiss(x)` returns 1 if
+    missing, else 0. Negate with `!sysmiss(x)`. Examples:
+    `drop if sysmiss(income)`, `replace flag = 0 if sysmiss(flag)`.
+  - To *produce* missing values without explicit `.`: use the
+    `if cond` form on `generate`. Rows that don't match the
+    condition get missing automatically:
     `generate ung_inntekt = inntekt if alder < 30`
     (every row where `alder >= 30` becomes missing).
-  - To *recode* values to missing: use the explicit `missing` keyword in
-    a `recode` rule, e.g. `recode x (1/7 = 0) (missing = 99)`.
+  - To *recode* values to missing: use the explicit `missing`
+    keyword in a `recode` rule, e.g. `recode x (1/7 = 0) (missing = 99)`.
 
 Import aliases are recommended (`import db/INNTEKT_WLONN as inntekt`) — use
 the alias for every downstream reference, but the raw UPPER_CASE name is
