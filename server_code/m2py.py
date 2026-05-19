@@ -1,6 +1,45 @@
 import re
 import math
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Streng emulering (microdata.no-modus)
+# Settes fra JS (Pyodide) via globals()['M2PY_STRICT_EMULATION']. Default: streng.
+# Når flagget mangler (f.eks. ved API-bruk uten browser), defaulter vi til strengt
+# slik at brukere ikke utvikler skript som ikke kjører i prod.
+# ─────────────────────────────────────────────────────────────────────────────
+def _is_strict_emulation():
+    v = globals().get('M2PY_STRICT_EMULATION', '1')
+    return v in (True, 1, '1', 'true', 'True', 'yes', 'on')
+
+# Variabelnavn-mønstre som identifiserer pseudonymer i microdata.no.
+# Bruker disse som backup når metadata mangler eksplisitt is_pseudonym.
+_PSEUDONYM_NAME_SUFFIXES = ('_FNR', '_PERSON_ID', '_PSEUDONYM')
+
+def _meta_is_pseudonym(meta, registry_name=None):
+    """Returnerer True hvis variabelen er en pseudonym i microdata.no."""
+    if isinstance(meta, dict):
+        if meta.get('is_pseudonym'):
+            return True
+        dt = str(meta.get('microdata_datatype', '')).lower()
+        if 'pseudonym' in dt:
+            return True
+    if registry_name:
+        up = str(registry_name).upper()
+        if any(up.endswith(s) for s in _PSEUDONYM_NAME_SUFFIXES):
+            return True
+    return False
+
+def _meta_is_string_type(meta):
+    """Returnerer True hvis variabelen er alfanumerisk (string) i microdata.no."""
+    if not isinstance(meta, dict):
+        return False
+    dt = str(meta.get('microdata_datatype', '')).lower()
+    if 'alfanumerisk' in dt:
+        return True
+    if str(meta.get('data_type', '')).lower() in ('string', 'str', 'text'):
+        return True
+    return False
+
 def _smart_float_fmt(x, base_dec):
     """Formater float med base_dec desimaler; øker automatisk for tall < 1."""
     try:
@@ -207,6 +246,17 @@ class MicroParser:
             if m:
                 vars_part = m.group(1).strip().split()
                 return {'vars': vars_part, 'into': m.group(2), 'on': m.group(3)}
+            # Forsøk å fange multi-key forsøk: `merge ... into X on k1 k2` eller
+            # `merge ... into X on (k1 k2)` — S2: reject med klar feilmelding.
+            m_multi = re.match(
+                r"^(.*?)\binto\b\s+(\w+)\s+on\s+\(?\s*([^)]+?)\s*\)?\s*$",
+                remainder.strip(), re.IGNORECASE
+            )
+            if m_multi:
+                on_spec = m_multi.group(3).strip()
+                keys = on_spec.split()
+                if len(keys) > 1:
+                    return {'_multi_key_error': True, 'keys': keys}
             # Gammel syntaks: merge datasett-navn [, on(nøkkel)]
             toks = remainder.strip().split()
             return toks if toks else []
@@ -344,8 +394,18 @@ class MicroParser:
                     return {"raw": remainder, "_for_error":
                             "for-løkke mangler iteratornavn"}
                 spec = spec.strip()
-                if spec.startswith('(') and spec.endswith(')'):
-                    spec = spec[1:-1].strip()
+                # S5: avvis literal parens rundt iterator-spec (microdata.no-syntaks
+                # bruker ikke parens — parentesene i grammatikken er meta-syntaktiske).
+                if _is_strict_emulation() and spec.startswith('(') and spec.endswith(')'):
+                    return {"raw": remainder, "_for_error":
+                            "parentes rundt iterator-listen er ikke gyldig i "
+                            "microdata.no. Skriv f.eks. `for y in 1998:2009` eller "
+                            "`for y in 1998, 1999, 2000` (uten parens)."}
+                # S5: avvis literal ellipsis (...) i verdilisten — bruk range i stedet.
+                if _is_strict_emulation() and '...' in spec:
+                    return {"raw": remainder, "_for_error":
+                            "ellipsis `...` er ikke gyldig i for-løkker i "
+                            "microdata.no. Bruk range-syntax: f.eks. `for y in 1998 : 2009`."}
                 # Top-level komma-split for multi-iterator. For single-iterator
                 # behandles hele spec som én verdiliste.
                 if len(var_names) > 1:
@@ -2926,6 +2986,15 @@ AGG_STAT_ALIAS = {
     'gini': calculate_gini,
 }
 
+# Statistikker som ikke er støttet i microdata.no — avvises i streng modus.
+# `first`/`last` er pandas-konstruksjoner som ikke finnes i prod.
+_REJECTED_COLLAPSE_STATS = {'first', 'last'}
+
+# Statistikker som er gyldige i microdata.no (for feilmeldinger).
+_SUPPORTED_COLLAPSE_STATS_DISPLAY = (
+    'count, sum, mean, sd, median, min, max, p25, p75, gini, iqr, percent'
+)
+
 # ── NPR (Norsk pasientregister) ──────────────────────────────────────────────
 _NPR_ENTITY = 'episode_npr'
 
@@ -3854,6 +3923,26 @@ class StatsEngine:
 
         if cmd == 'collapse':
             by_var = options.get('by')
+            # S1: avvis stat-typer som ikke finnes i microdata.no (streng modus alltid)
+            for t in args['targets']:
+                stat = (t.get('stat') or '').lower()
+                if stat in _REJECTED_COLLAPSE_STATS:
+                    raise ValueError(
+                        f"collapse ({stat}) er ikke støttet i microdata.no. "
+                        f"Støttede statistikker: {_SUPPORTED_COLLAPSE_STATS_DISPLAY}."
+                    )
+            # S2: avvis multi-key by(k1 k2) — microdata.no støtter kun én nøkkel
+            if isinstance(by_var, str) and by_var.strip():
+                by_keys = by_var.strip().split()
+                if len(by_keys) > 1:
+                    raise ValueError(
+                        f"microdata.no støtter bare én nøkkel-variabel i by(). "
+                        f"Fikk {len(by_keys)} ({', '.join(by_keys)}). "
+                        f"Workaround: lag en composite key først:\n"
+                        f"  generate composite = string({by_keys[0]}) ++ \"_\" ++ string({by_keys[1]})\n"
+                        f"  collapse (...) ..., by(composite)"
+                    )
+                by_var = by_keys[0]
             missing = [t['src'] for t in args['targets'] if t['src'] not in df.columns]
             if missing:
                 raise ValueError(
@@ -5690,6 +5779,137 @@ class MicroInterpreter:
         dec = int(self.default_decimals)
         pd.options.display.float_format = lambda x: _smart_float_fmt(x, dec)
 
+    # ─── Streng-emulering: metadata-oppslag for kolonner ────────────────────
+    def _lookup_var_meta(self, colname):
+        """Slå opp metadata-dict for en kolonne (alias eller registry-navn)."""
+        if not colname:
+            return {}
+        cat = getattr(self.data_engine, 'catalog', {}) or {}
+        short = getattr(self.data_engine, '_catalog_by_short', {}) or {}
+        if colname in cat:
+            return cat[colname]
+        if colname in short:
+            return short[colname]
+        reg = getattr(self.label_manager, 'var_alias_to_path', {}).get(colname)
+        if reg:
+            if reg in cat:
+                return cat[reg]
+            rshort = reg.split('/')[-1]
+            if rshort in short:
+                return short[rshort]
+        return {}
+
+    def _registry_name_for(self, colname):
+        """Returner registry-navn (path) for en kolonne hvis kjent, ellers selve navnet."""
+        if not colname:
+            return colname
+        reg = getattr(self.label_manager, 'var_alias_to_path', {}).get(colname)
+        return reg or colname
+
+    def _is_pseudonym_col(self, colname):
+        """True hvis kolonnen er en pseudonym-variabel (kun i strict mode)."""
+        if not _is_strict_emulation():
+            return False
+        meta = self._lookup_var_meta(colname)
+        reg = self._registry_name_for(colname)
+        return _meta_is_pseudonym(meta, registry_name=reg)
+
+    def _is_string_col(self, colname):
+        """True hvis kolonnen er deklarert som alfanumerisk i metadata."""
+        meta = self._lookup_var_meta(colname)
+        return _meta_is_string_type(meta)
+
+    def _check_not_pseudonym(self, colname, context):
+        """Reiser ValueError hvis colname er pseudonym (med klar feilmelding).
+        context: kort beskrivelse av operasjonen, f.eks. 'generate', 'sammenligning'.
+        """
+        if self._is_pseudonym_col(colname):
+            raise ValueError(
+                f"{colname} er en pseudonymvariabel og kan ikke brukes i {context}. "
+                f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+            )
+
+    def _check_numeric_var(self, colname, op):
+        """Reiser ValueError hvis colname er alfanumerisk i metadata (kun strict mode).
+        op: navn på operasjonen, f.eks. 'mean', 'sammenligning', 'sum'.
+        """
+        if not _is_strict_emulation():
+            return
+        if self._is_string_col(colname):
+            raise ValueError(
+                f"{colname} er en strengvariabel (alfanumerisk) i microdata.no — "
+                f"operasjonen '{op}' krever en numerisk variabel. "
+                f"Bruk frekvens/count i stedet (f.eks. tabulate)."
+            )
+
+    def _check_stats_args(self, cmd, args, df=None, condition=None):
+        """S3 + T-3: valider variable-args for stat-kommandoer før dispatch.
+        Avviser numeriske operasjoner på alfanumeriske variabler, og bruk av
+        pseudonymer i analyse-/transformasjons-kommandoer."""
+        if not _is_strict_emulation():
+            return
+        # Stat-operasjoner som krever numerisk variabel
+        _NUMERIC_STATS = {'sum', 'mean', 'sd', 'std', 'median', 'min', 'max',
+                          'p25', 'p75', 'percent', 'gini', 'iqr', 'sem',
+                          'semean', 'sebinomial'}
+        # Kommandoer som er rene analyser (krever ikke-pseudonym variabler)
+        _ANALYSIS_CMDS = {'summarize', 'correlate', 'ci', 'anova', 'normaltest',
+                          'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                          'regress-panel', 'ivregress'}
+
+        def _maybe_check_pseudonym(varname):
+            if self._is_pseudonym_col(varname):
+                raise ValueError(
+                    f"{varname} er en pseudonymvariabel og kan ikke brukes i {cmd}. "
+                    f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                )
+
+        def _check_expr_for_pseudonyms(expr):
+            """Pluk ut identifikatorer fra et uttrykk og sjekk om noen er pseudonym-kolonner."""
+            if not isinstance(expr, str) or df is None:
+                return
+            cols = set(df.columns) if hasattr(df, 'columns') else set()
+            # Plukk ut bare identifikatorer som matcher kolonner i datasettet
+            for ident in set(re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', expr)):
+                if ident in cols and self._is_pseudonym_col(ident):
+                    raise ValueError(
+                        f"{ident} er en pseudonymvariabel og kan ikke brukes i {cmd}-uttrykk. "
+                        f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                    )
+
+        if cmd in ('collapse', 'aggregate') and isinstance(args, dict):
+            for t in args.get('targets', []):
+                src = t.get('src')
+                stat = (t.get('stat') or '').lower()
+                if src and stat in _NUMERIC_STATS:
+                    self._check_numeric_var(src, stat)
+                # Pseudonym kan ikke brukes som src for collapse-stat (kun som by)
+                if src:
+                    _maybe_check_pseudonym(src)
+        elif cmd in _ANALYSIS_CMDS:
+            # args kan være liste eller dict
+            vars_list = []
+            if isinstance(args, (list, tuple)):
+                vars_list = list(args)
+            elif isinstance(args, dict):
+                vars_list = list(args.get('vars', [])) or []
+                for k in ('dep', 'runvar'):
+                    v = args.get(k)
+                    if v:
+                        vars_list.append(v)
+                for k in ('exog', 'endog', 'instruments'):
+                    vs = args.get(k) or []
+                    vars_list.extend(vs)
+            for v in vars_list:
+                if isinstance(v, str) and v:
+                    self._check_numeric_var(v, cmd)
+                    _maybe_check_pseudonym(v)
+        elif cmd in ('generate', 'replace') and isinstance(args, dict):
+            _check_expr_for_pseudonyms(args.get('expression', ''))
+        # keep/drop med betingelse: sjekk condition-strengen
+        if cmd in ('keep', 'drop') and condition:
+            _check_expr_for_pseudonyms(condition)
+
     def sync_datasets_to_globals(self, g):
         """Binder self.datasets til et exec-globals dict (Pyodide): datasets, active_name, active_df, og ett navn per gyldig identifier."""
         g["datasets"] = self.datasets
@@ -6572,6 +6792,23 @@ class MicroInterpreter:
                     )
                     return
 
+            # S3 + T-3 (streng emulering): valider variabeltyper og pseudonymer
+            # for kommandoer der det er meningsfullt. Aktivt datasett ikke alltid satt.
+            _strict_check_cmds = (
+                'collapse', 'aggregate', 'summarize', 'correlate', 'ci', 'anova',
+                'normaltest', 'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                'regress-panel', 'ivregress', 'generate', 'replace', 'keep', 'drop'
+            )
+            if cmd in _strict_check_cmds:
+                _strict_df = None
+                if self.active_name and self.active_name in self.datasets:
+                    _strict_df = self.datasets[self.active_name]
+                try:
+                    self._check_stats_args(cmd, args, df=_strict_df, condition=cond)
+                except ValueError as _strict_err:
+                    self._log(f"FEIL: {_strict_err}")
+                    return
+
             # 1. Globale/Sesjons-kommandoer
             if cmd == 'create-dataset':
                 self.datasets[args[0]] = pd.DataFrame()
@@ -6643,6 +6880,17 @@ class MicroInterpreter:
                 return
 
             if cmd == 'merge':
+                # S2: avvis multi-key merge — microdata.no støtter bare én nøkkel
+                if isinstance(args, dict) and args.get('_multi_key_error'):
+                    keys = args.get('keys', [])
+                    self._log(
+                        f"FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
+                        f"Fikk {len(keys)} ({', '.join(keys)}). "
+                        f"Workaround: lag en composite key først:\n"
+                        f"  generate composite = string({keys[0]}) ++ \"_\" ++ string({keys[1]})\n"
+                        f"  merge ... into <ds> on composite"
+                    )
+                    return
                 # --- Ny syntaks: merge var-list into dataset [on variable] ---
                 if isinstance(args, dict) and 'into' in args:
                     into_name = args['into']
@@ -6773,6 +7021,17 @@ class MicroInterpreter:
                 _active_entity = self.dataset_entity_types.get(self.active_name, 'person')
                 _default_key   = _ENTITY_ID_COL.get(_active_entity, 'unit_id')
                 on_opt = opts.get('on', _default_key)
+                # S2: avvis multi-key også i gammel syntaks
+                if isinstance(on_opt, str) and len(on_opt.split()) > 1:
+                    _keys = on_opt.split()
+                    self._log(
+                        f"FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
+                        f"Fikk {len(_keys)} ({', '.join(_keys)}). "
+                        f"Workaround: lag en composite key først:\n"
+                        f"  generate composite = string({_keys[0]}) ++ \"_\" ++ string({_keys[1]})\n"
+                        f"  merge {args[0]}, on(composite)"
+                    )
+                    return
                 on_cols = on_opt.split() if isinstance(on_opt, str) else list(on_opt)
                 on_cols = [c for c in on_cols if c in self.active_df.columns and c in target_df.columns]
                 if not on_cols:
