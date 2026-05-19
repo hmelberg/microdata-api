@@ -189,6 +189,20 @@ keys only.
 
 **For continuous variables**, prefer `summarize` (returns mean/sd/
 quantiles, not individual values).
+
+**Per-script override (m2py simulator only):** users may disable
+disclosure control for a single script with a magic comment:
+
+    // m2py: disclosure-control=off
+    create-dataset bef
+    ...
+
+This is a regular `//` comment that microdata.no production silently
+ignores, so the same script runs in both environments — only m2py
+reacts to it. Default is ON. Values: `on`/`off`, `true`/`false`,
+`1`/`0`, `yes`/`no`. Short form `dc` also works. Only emit this
+directive when the user explicitly asks to see raw (uncensored)
+results — e.g. for teaching or debugging.
 """
 
 
