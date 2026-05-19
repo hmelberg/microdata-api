@@ -5895,6 +5895,54 @@ class MicroInterpreter:
         dec = int(self.default_decimals)
         pd.options.display.float_format = lambda x: _smart_float_fmt(x, dec)
 
+    # ─── Script-direktiver (// m2py: key=value) ─────────────────────────────
+    # Brukes for å overstyre avsløringskontroll per script. Direktivene leses
+    # før scriptet kjøres og restaureres etterpå, slik at f.eks. en API-konsument
+    # kan kjøre to scripts på rad uten at det ene "lekker" innstilling til neste.
+    _DIRECTIVE_RE = re.compile(
+        r'^\s*//\s*m2py\s*:\s*([\w-]+)\s*=\s*(\S+)\s*$', re.IGNORECASE
+    )
+    _DIRECTIVE_TRUTHY = ('on', 'true', '1', 'yes', 'pa', 'på')
+    _DIRECTIVE_FALSY  = ('off', 'false', '0', 'no', 'av')
+
+    def _apply_script_directives(self, script_text):
+        """Skann scriptet etter // m2py: <key>=<value>-linjer og mut globalen
+        deretter. Returner dict med opprinnelige verdier som skal gjenopprettes."""
+        saved = {}
+        for raw in script_text.splitlines():
+            m = self._DIRECTIVE_RE.match(raw)
+            if not m:
+                continue
+            key = m.group(1).lower()
+            val = m.group(2).lower().strip(';,')
+            if key in ('disclosure-control', 'disclosurecontrol', 'dc'):
+                global_name = 'M2PY_DISCLOSURE_CONTROL'
+            else:
+                # Ukjent direktiv — logg en advarsel og hopp over
+                self._log(f"// m2py: ukjent direktiv '{key}' — ignorert")
+                continue
+            new_val = (
+                '1' if val in self._DIRECTIVE_TRUTHY else
+                '0' if val in self._DIRECTIVE_FALSY else None
+            )
+            if new_val is None:
+                self._log(f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)")
+                continue
+            if global_name not in saved:
+                saved[global_name] = globals().get(global_name, '1')
+            globals()[global_name] = new_val
+            self._log(
+                f"// m2py: disclosure-control = "
+                f"{'PÅ' if new_val == '1' else 'AV'} (satt fra script-direktiv)"
+            )
+        return saved
+
+    def _restore_script_directives(self, saved):
+        """Gjenopprett globaler etter at scriptet er ferdig (uansett om det
+        feilet eller fullførte)."""
+        for key, old_val in saved.items():
+            globals()[key] = old_val
+
     # ─── Streng-emulering: metadata-oppslag for kolonner ────────────────────
     def _lookup_var_meta(self, colname):
         """Slå opp metadata-dict for en kolonne (alias eller registry-navn)."""
@@ -6482,6 +6530,13 @@ class MicroInterpreter:
 
     def run_script(self, script_text, echo_commands=None):
         script_text = self.parser.preprocess_script(script_text)
+        _directive_saved = self._apply_script_directives(script_text)
+        try:
+            return self._run_script_body(script_text, echo_commands)
+        finally:
+            self._restore_script_directives(_directive_saved)
+
+    def _run_script_body(self, script_text, echo_commands=None):
         lines = script_text.split('\n')
         echo = self.echo_commands if echo_commands is None else bool(echo_commands)
         # Callback for å yield mellom kommandoer (Pyodide: lar nettleseren oppdatere UI)
@@ -6589,6 +6644,14 @@ class MicroInterpreter:
         """Async versjon av run_script som yielder mellom kommandoer (for Pyodide/nettleser)."""
         import asyncio
         script_text = self.parser.preprocess_script(script_text)
+        _directive_saved = self._apply_script_directives(script_text)
+        try:
+            return await self._run_script_async_body(script_text, echo_commands)
+        finally:
+            self._restore_script_directives(_directive_saved)
+
+    async def _run_script_async_body(self, script_text, echo_commands=None):
+        import asyncio
         lines = script_text.split('\n')
         echo = self.echo_commands if echo_commands is None else bool(echo_commands)
         _cmd_count = 0
