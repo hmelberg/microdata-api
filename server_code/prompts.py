@@ -108,10 +108,23 @@ GRAMMAR_CHEATSHEET = """\
   - ❌ `for år in (1998, 1999, 2000)`  (parens not allowed)
   - ❌ `for år in 1998, ..., 2009`     (ellipsis not allowed)
   - ❌ `for år in 1998 2009 { ... }`   (no braces — use `end`)
-- **Missing values**: use `sysmiss(x)` (returns 1 if x is system-missing,
-  else 0) — NOT `x == .` (Stata syntax, not supported). Negate with
-  `!sysmiss(x)`. Examples: `drop if sysmiss(income)`,
-  `replace flag = 0 if sysmiss(flag)`.
+- **Missing values**: the literal `.` (Stata's missing-value token)
+  is allowed only in ASSIGNMENT; it is NOT allowed in comparisons.
+  - ✅ Assignment OK: `generate x = .`, `replace x = . if cond`
+    (initialises or sets the variable to missing for the matching
+    rows).
+  - ❌ Comparison NOT OK: `x == .`, `x != .`, `if y == .`,
+    `keep if income == .`. The platform rejects these.
+  - To *test* if a value is missing: `sysmiss(x)` returns 1 if
+    missing, else 0. Negate with `!sysmiss(x)`. Examples:
+    `drop if sysmiss(income)`, `replace flag = 0 if sysmiss(flag)`.
+  - To *produce* missing values without explicit `.`: use the
+    `if cond` form on `generate`. Rows that don't match the
+    condition get missing automatically:
+    `generate ung_inntekt = inntekt if alder < 30`
+    (every row where `alder >= 30` becomes missing).
+  - To *recode* values to missing: use the explicit `missing`
+    keyword in a `recode` rule, e.g. `recode x (1/7 = 0) (missing = 99)`.
 
 Import aliases are recommended (`import db/INNTEKT_WLONN as inntekt`) — use
 the alias for every downstream reference, but the raw UPPER_CASE name is
@@ -144,15 +157,85 @@ If you import a Time-Varying variable without a date, the script will fail.
 
 
 PRIVACY_RULES = """\
-## Privacy guardrails (microdata.no enforces these)
+## Privacy guardrails / disclosure control (microdata.no enforces these)
 
-- **Never use:** `list`, `browse`, `print`, `head`, `tail`, `show`. These
-  would expose individual rows and the platform forbids them.
-- `tabulate` automatically hides cells where the count would identify
-  individuals (the platform suppresses output if more than ~50% of cells
-  have count < 5). Prefer aggregation over enumeration.
-- For continuous variables, use `summarize` (returns mean/sd/quantiles, not
-  individual values).
+The platform enforces specific numeric thresholds. A script that triggers
+any of them STOPS with an error — it does not silently degrade. Plan
+around them: e.g. don't filter to a sub-population of 50, don't generate
+a flag that only 3 rows satisfy.
+
+**Inspection forbidden:** never use `list`, `browse`, `print`, `head`,
+`tail`, `show`. These would expose individual rows.
+
+**T1 — Min 1000 enheter per populasjon.** After `keep if`, `drop if`, or
+`sample`, the active dataset must still have ≥ 1000 rows. If your filter
+would leave a smaller population, the platform refuses. Plan your
+filters so the resulting `n` clearly clears 1000.
+
+**T5 — Sparse tables hidden.** `tabulate` suppresses its output if more
+than 50% of cells have a frequency < 5. To avoid this, use coarser
+categories (e.g. age bands instead of single years) or grow the
+population. Two-way tables with many small categories are especially
+prone to this.
+
+**T6 — Changes must affect ≥ 10 rows (or all, or none).**
+`generate`, `replace`, `recode` are blocked if they would affect 1–9
+rows, OR if they would leave only 1–9 rows unchanged. So
+`replace x = 1 if alder == 17` will fail if there are fewer than 10
+17-year-olds in the dataset. Allowed: changes that affect every row
+or none. Build flags with sufficient prevalence:
+`generate ung = (alder < 30)` is fine; `generate ekstrem = (alder == 99)`
+on a dataset with 4 such rows will fail.
+
+**T7 — `summarize` requires ≥ 10 obs.** `summarize`, `correlate`, `ci`,
+`anova`, and `normaltest` are blocked on populations smaller than 10.
+`tabulate` (frequencies) is exempt. If a question only makes sense on a
+small group, suggest broadening the group or using a frequency table
+instead.
+
+**T8 — Medians and percentiles rounded to 3 significant digits.** In
+`summarize` output, the 1%/25%/50%/75%/99% columns are rounded
+(47238 → 47200, 2.7183 → 2.72). Mean and SD are NOT rounded. Don't
+write scripts that depend on percentile precision below 3 sig figs.
+
+**T2 — 1%/99% winsorization on displayed numeric statistics.** Before
+displaying mean and SD in `summarize`, and before plotting in
+`histogram`, `scatter`, `boxplot`, each numeric variable is clipped:
+values below the 1st percentile become the 1st percentile value, and
+values above the 99th percentile become the 99th percentile value.
+Consequences:
+- `mean` and `sd` are biased toward the center (slightly lower for
+  right-skewed variables like income).
+- `min` and `max` shown in grouped summarize equal the 1%/99% bounds,
+  not the true extremes.
+- `median` and quartiles (25%/75%) are unaffected by winsorization.
+- `regress`, `logit`, `probit`, `anova` use the RAW (un-winsorized)
+  values. Coefficients are unbiased.
+- `collapse` with a non-pseudonym `by()` key (kommune, fylke, …) also
+  uses winsorized values; `collapse by(_FNR)` (pseudonym) uses raw.
+Don't tell users that the displayed mean is the population mean — it's
+the winsorized mean. For the true population mean, use `regress y ` (no
+covariates) which reports `_cons`.
+
+**Pseudonyms:** see the Pseudonym rules section — `_FNR` variables are
+keys only.
+
+**For continuous variables**, prefer `summarize` (returns mean/sd/
+quantiles, not individual values).
+
+**Per-script override (m2py simulator only):** users may disable
+disclosure control for a single script with a magic comment:
+
+    // m2py: disclosure-control=off
+    create-dataset bef
+    ...
+
+This is a regular `//` comment that microdata.no production silently
+ignores, so the same script runs in both environments — only m2py
+reacts to it. Default is ON. Values: `on`/`off`, `true`/`false`,
+`1`/`0`, `yes`/`no`. Short form `dc` also works. Only emit this
+directive when the user explicitly asks to see raw (uncensored)
+results — e.g. for teaching or debugging.
 """
 
 
