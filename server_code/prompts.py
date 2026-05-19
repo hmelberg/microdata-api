@@ -95,14 +95,16 @@ GRAMMAR_CHEATSHEET = """\
 - Filter: `keep if <cond>`, `drop if <cond>`.
 - Loops: `for <i> [, <j>] in <values> [; <g> in ...] ... end`.
   `<values>` is either a range `lo : hi` (inclusive) or a list of
-  values (whitespace- or comma-separated). Use `$i` (or `${expr}` for
+  values (whitespace- or comma-separated). String values are written
+  bare — quotes are NOT required and should be omitted unless a value
+  would collide with a reserved word. Use `$i` (or `${expr}` for
   arithmetic) to substitute the iterator value. Close every loop with
   `end`. **Do NOT use literal parens around the value list, and do NOT
   use literal ellipsis `...`** — neither is valid microdata.no syntax.
   - ✅ `for år in 1998 : 2009`
   - ✅ `for forelder in mor, far`
   - ✅ `for år, v in 0:2, første andre tredje`
-  - ✅ `for år in 1998 : 2009 ; sted in 'indre' 'ytre'`  (nested)
+  - ✅ `for år in 1998 : 2009 ; sted in indre ytre`  (nested)
   - ❌ `for år in (1998, 1999, 2000)`  (parens not allowed)
   - ❌ `for år in 1998, ..., 2009`     (ellipsis not allowed)
   - ❌ `for år in 1998 2009 { ... }`   (no braces — use `end`)
