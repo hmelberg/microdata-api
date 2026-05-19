@@ -2,14 +2,26 @@ import re
 import math
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Streng emulering (microdata.no-modus)
-# Settes fra JS (Pyodide) via globals()['M2PY_STRICT_EMULATION']. Default: streng.
-# Når flagget mangler (f.eks. ved API-bruk uten browser), defaulter vi til strengt
-# slik at brukere ikke utvikler skript som ikke kjører i prod.
+# Avsløringskontroll (microdata.no-stil sensurering)
+# Når PÅ: matcher microdata.no — pseudonym-validering, type-sjekk, blokker små
+# populasjoner og tabeller, winsoriserer, runder persentiler.
+# Default: PÅ. Også PÅ når flagget mangler (API/script-bruk).
 # ─────────────────────────────────────────────────────────────────────────────
-def _is_strict_emulation():
-    v = globals().get('M2PY_STRICT_EMULATION', '1')
+def _is_disclosure_control():
+    v = globals().get('M2PY_DISCLOSURE_CONTROL', '1')
     return v in (True, 1, '1', 'true', 'True', 'yes', 'on')
+
+# Bakoverkompatibilitet: tidligere het pseudonym-/type-/for-løkke-sjekkene
+# "streng emulering". Nå er det ett samlet valg.
+_is_strict_emulation = _is_disclosure_control
+
+# Terskler for avsløringskontroll (matcher microdata.no)
+_DC_MIN_POPULATION = 1000        # T1: min populasjon for create-dataset/keep-if
+_DC_MIN_AFFECTED = 10            # T6: min rader påvirket av generate/replace/recode
+_DC_MIN_SUMMARIZE = 10           # T7: min populasjon for summarize
+_DC_TABULATE_LOW_CELL = 5        # T5: celle-frekvenser <5 telles som "lave"
+_DC_TABULATE_LOW_RATIO = 0.5     # T5: >50% lave celler stopper tabellen
+_DC_PERCENTILE_SIG_DIGITS = 3    # T8: signifikante sifre for median/persentiler
 
 # Variabelnavn-mønstre som identifiserer pseudonymer i microdata.no.
 # Bruker disse som backup når metadata mangler eksplisitt is_pseudonym.
@@ -39,6 +51,44 @@ def _meta_is_string_type(meta):
     if str(meta.get('data_type', '')).lower() in ('string', 'str', 'text'):
         return True
     return False
+
+def _winsorize_series(s, lower=0.01, upper=0.99):
+    """T2: kapp en serie til [lower, upper]-percentilene. Returnerer en kopi
+    der verdier under lower-percentilen settes til lower-grensen, og verdier
+    over upper-percentilen settes til upper-grensen. NaN bevares.
+
+    Brukes ved visning av deskriptiv statistikk og plot. Påvirker IKKE regresjon
+    eller collapse med pseudonym by-key.
+    """
+    try:
+        import pandas as _pd
+        if not _pd.api.types.is_numeric_dtype(s):
+            return s
+        s_clean = s.dropna()
+        # Krever nok obs for at percentilberegningen er meningsfull
+        if len(s_clean) < _DC_MIN_AFFECTED:
+            return s
+        p_lo = s_clean.quantile(lower)
+        p_hi = s_clean.quantile(upper)
+        return s.clip(lower=p_lo, upper=p_hi)
+    except Exception:
+        return s
+
+def _round_to_sig_digits(x, sig=_DC_PERCENTILE_SIG_DIGITS):
+    """Rund x til `sig` signifikante sifre. Håndterer NaN, 0, og inf trygt.
+    Brukes for T8: median og persentiler skal kun vises med 3-sifret nøyaktighet."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return x
+    if x != x or x in (float('inf'), float('-inf')):
+        return x
+    if x == 0:
+        return 0.0
+    ax = abs(x)
+    # Antall desimaler å beholde = sig - 1 - floor(log10(ax))
+    d = sig - 1 - int(math.floor(math.log10(ax)))
+    return round(x, d)
 
 def _smart_float_fmt(x, base_dec):
     """Formater float med base_dec desimaler; øker automatisk for tall < 1."""
@@ -3969,9 +4019,24 @@ class StatsEngine:
             vars_to_sum = [v for v in vars_to_sum if v in df.columns and pd.api.types.is_numeric_dtype(df[v])]
             if not vars_to_sum:
                 return pd.DataFrame()
+            # T2: winsoriser hver variabel globalt til 1/99-persentilen før
+            # mean/std/min/max beregnes. Persentiler er uendret av winsorisering
+            # (1% og 99% blir kuttverdiene). Påvirker IKKE collapse-aggregering.
+            _dc_on = _is_disclosure_control()
+            _w_cols = (
+                {v: _winsorize_series(df[v]) for v in vars_to_sum}
+                if _dc_on else
+                {v: df[v] for v in vars_to_sum}
+            )
             if by_var and by_var in df.columns:
-                # Gruppert summarize
-                grp = df.groupby(by_var, dropna=False)[vars_to_sum]
+                # Gruppert summarize — bruk winsoriserte kolonner i et arbeids-df
+                if _dc_on:
+                    _df_w = df.copy()
+                    for v in vars_to_sum:
+                        _df_w[v] = _w_cols[v]
+                    grp = _df_w.groupby(by_var, dropna=False)[vars_to_sum]
+                else:
+                    grp = df.groupby(by_var, dropna=False)[vars_to_sum]
                 result = grp.agg(['mean', 'std', 'min', 'max', 'count'])
                 if 'gini' in options:
                     for v in vars_to_sum:
@@ -3982,11 +4047,16 @@ class StatsEngine:
                 return result
             # Bygg statistikk-rader: Gj.snitt, Std.avvik, Antall, persentiler
             col_map = {}
-            col_map['Gj.snitt'] = {v: df[v].mean() for v in vars_to_sum}
-            col_map['Std.avvik'] = {v: df[v].std() for v in vars_to_sum}
+            col_map['Gj.snitt'] = {v: _w_cols[v].mean() for v in vars_to_sum}
+            col_map['Std.avvik'] = {v: _w_cols[v].std() for v in vars_to_sum}
             col_map['Antall'] = {v: df[v].count() for v in vars_to_sum}
+            # T8: persentiler (inkl. median) vises med 3 signifikante sifre når
+            # avsløringskontroll er på. Gjelder ikke gjennomsnitt eller std.
             for pct, label in [(0.01, '1%'), (0.25, '25%'), (0.5, '50%'), (0.75, '75%'), (0.99, '99%')]:
-                col_map[label] = {v: df[v].quantile(pct) for v in vars_to_sum}
+                if _dc_on:
+                    col_map[label] = {v: _round_to_sig_digits(df[v].quantile(pct)) for v in vars_to_sum}
+                else:
+                    col_map[label] = {v: df[v].quantile(pct) for v in vars_to_sum}
             if 'gini' in options:
                 col_map['Gini'] = {v: calculate_gini(df[v]) for v in vars_to_sum}
             if 'iqr' in options:
@@ -4218,6 +4288,27 @@ class StatsEngine:
             if 'rowpct' in options: normalize = 'index'
             elif 'colpct' in options: normalize = 'columns'
             elif 'cellpct' in options: normalize = 'all'
+
+            # T5: avsløringskontroll — stopp tabeller med for mange små celler.
+            # Sjekk på RÅ tellinger, uavhengig av om bruker vil ha prosenter.
+            if _is_disclosure_control():
+                if var2:
+                    _raw_counts = pd.crosstab(df[var1], df[var2], dropna=dropna)
+                else:
+                    _raw_counts = df[var1].value_counts(dropna=not dropna)
+                _flat = _raw_counts.values.flatten() if hasattr(_raw_counts, 'values') else _raw_counts.to_numpy().flatten()
+                _total_cells = len(_flat)
+                if _total_cells > 0:
+                    _low_cells = int((_flat < _DC_TABULATE_LOW_CELL).sum())
+                    _low_ratio = _low_cells / _total_cells
+                    if _low_ratio > _DC_TABULATE_LOW_RATIO:
+                        raise ValueError(
+                            f"Tabellen kan ikke vises pga. for mange små celler "
+                            f"({_low_cells} av {_total_cells} celler har frekvens "
+                            f"<{_DC_TABULATE_LOW_CELL}, dvs. {_low_ratio*100:.0f}% — "
+                            f"grensen er {int(_DC_TABULATE_LOW_RATIO*100)}%). "
+                            f"Reduser antall kategorier eller utvid populasjonen."
+                        )
 
             if var2:
                 ct = pd.crosstab(df[var1], df[var2], normalize=normalize, dropna=dropna,
@@ -5476,6 +5567,9 @@ class PlotHandler:
                               annotations=[dict(text='Ingen data', xref='paper', yref='paper',
                                                 x=0.5, y=0.5, showarrow=False)])
             return fig
+        # T2: winsoriser numerisk data før plot (ikke for diskrete/kategoriske)
+        if _is_disclosure_control() and not discrete and pd.api.types.is_numeric_dtype(s):
+            s = _winsorize_series(s)
         if discrete or not pd.api.types.is_numeric_dtype(s):
             vc = s.value_counts().sort_index()
             if percent:
@@ -5537,18 +5631,25 @@ class PlotHandler:
         over_var = options.get('over')
         lm = options.get('_label_manager')
 
+        # T2: winsoriser numeriske kolonner i en arbeids-df hvis disclosure_control
+        _dc_w = _is_disclosure_control()
+        def _wcol(series):
+            if _dc_w and pd.api.types.is_numeric_dtype(series):
+                return _winsorize_series(series)
+            return series
+
         if len(vars_) > 1:
             # Multiple variables: one box trace per variable, ignore over
             fig = go.Figure()
             for var in vars_:
-                s = df[var].dropna()
+                s = _wcol(df[var]).dropna()
                 if not s.empty:
                     fig.add_trace(go.Box(y=s, name=var))
             fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=60),
                               xaxis_title='', yaxis_title='')
         else:
             var = vars_[0]
-            s = df[var].dropna()
+            s = _wcol(df[var]).dropna()
             if s.empty:
                 return None
             if over_var and over_var in df.columns:
@@ -5556,13 +5657,17 @@ class PlotHandler:
                     fig = go.Figure()
                     for val in sorted(df[over_var].dropna().unique()):
                         label = lm.format_value(over_var, val)
-                        subset = df.loc[df[over_var] == val, var].dropna()
+                        subset = _wcol(df.loc[df[over_var] == val, var]).dropna()
                         if not subset.empty:
                             fig.add_trace(go.Box(y=subset, name=str(label)))
                 else:
-                    fig = px.box(df, x=over_var, y=var)
+                    _df_b = df.copy()
+                    _df_b[var] = _wcol(df[var])
+                    fig = px.box(_df_b, x=over_var, y=var)
             else:
-                fig = px.box(df, y=var)
+                _df_b = df.copy()
+                _df_b[var] = _wcol(df[var])
+                fig = px.box(_df_b, y=var)
             fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=60),
                               xaxis_title=over_var or '', yaxis_title=var)
         return fig
@@ -5582,8 +5687,19 @@ class PlotHandler:
         sub = df[[var_x, var_y]].dropna()
         if sub.empty:
             return None
+        # T2: winsoriser begge akser når avsløringskontroll er på
+        if _is_disclosure_control():
+            if pd.api.types.is_numeric_dtype(sub[var_x]):
+                sub = sub.assign(**{var_x: _winsorize_series(sub[var_x])})
+            if pd.api.types.is_numeric_dtype(sub[var_y]):
+                sub = sub.assign(**{var_y: _winsorize_series(sub[var_y])})
         if by_var and by_var in df.columns:
             sub = df[[var_x, var_y, by_var]].dropna()
+            if _is_disclosure_control():
+                if pd.api.types.is_numeric_dtype(sub[var_x]):
+                    sub = sub.assign(**{var_x: _winsorize_series(sub[var_x])})
+                if pd.api.types.is_numeric_dtype(sub[var_y]):
+                    sub = sub.assign(**{var_y: _winsorize_series(sub[var_y])})
             fig = go.Figure()
             for val in sub[by_var].unique():
                 mask = sub[by_var] == val
@@ -5840,6 +5956,72 @@ class MicroInterpreter:
                 f"{colname} er en strengvariabel (alfanumerisk) i microdata.no — "
                 f"operasjonen '{op}' krever en numerisk variabel. "
                 f"Bruk frekvens/count i stedet (f.eks. tabulate)."
+            )
+
+    # ─── Avsløringskontroll (T1, T5, T6, T7, T8) ───────────────────────────
+    def _count_affected_rows(self, before_series, after_series):
+        """Antall rader der verdien har endret seg (NaN-konsistent).
+        before_series kan være None (= ny kolonne, alle non-NaN er endret).
+        """
+        import pandas as _pd
+        if after_series is None:
+            return 0
+        if before_series is None:
+            # Ny kolonne: en rad er "endret" hvis den fikk en ikke-NaN verdi
+            return int(after_series.notna().sum())
+        # Behandle NaN-rader: NaN == NaN regnes som uendret
+        b = before_series.reset_index(drop=True)
+        a = after_series.reset_index(drop=True)
+        # Match lengder
+        n = min(len(b), len(a))
+        b = b.iloc[:n]; a = a.iloc[:n]
+        changed = ((b != a) & ~(b.isna() & a.isna()))
+        return int(changed.sum())
+
+    def _check_t6_changes(self, n_total, n_affected, cmd, target_name):
+        """T6: avvis hvis endringer påvirker 1-9 rader, eller alle bortsett fra <10."""
+        if not _is_disclosure_control():
+            return
+        if n_total <= 0:
+            return
+        # Unntak: 0 eller alle rader endret = OK
+        if n_affected == 0 or n_affected == n_total:
+            return
+        # Forbudt: 1-9 endret
+        if 0 < n_affected < _DC_MIN_AFFECTED:
+            raise ValueError(
+                f"{cmd} '{target_name}' påvirker bare {n_affected} av {n_total} enheter. "
+                f"microdata.no tillater ikke endringer som påvirker færre enn "
+                f"{_DC_MIN_AFFECTED} enheter (unntak: alle eller ingen)."
+            )
+        # Forbudt: alle bortsett fra <10 (dvs. n - affected ∈ 1..9)
+        n_unchanged = n_total - n_affected
+        if 0 < n_unchanged < _DC_MIN_AFFECTED:
+            raise ValueError(
+                f"{cmd} '{target_name}' lar bare {n_unchanged} av {n_total} enheter være "
+                f"uendret. microdata.no tillater ikke endringer som påvirker alle bortsett "
+                f"fra færre enn {_DC_MIN_AFFECTED} enheter."
+            )
+
+    def _check_t1_population(self, n, context):
+        """T1: avvis hvis populasjonen er <1000 enheter."""
+        if not _is_disclosure_control():
+            return
+        if n < _DC_MIN_POPULATION:
+            raise ValueError(
+                f"Populasjonen er {n} enheter ({context}). microdata.no tillater ikke "
+                f"populasjoner med færre enn {_DC_MIN_POPULATION} enheter."
+            )
+
+    def _check_t7_summarize_pop(self, n, cmd):
+        """T7: avvis deskriptiv statistikk på populasjoner <10."""
+        if not _is_disclosure_control():
+            return
+        if n < _DC_MIN_SUMMARIZE:
+            raise ValueError(
+                f"Populasjonen er {n} enheter. microdata.no krever minst "
+                f"{_DC_MIN_SUMMARIZE} enheter for deskriptiv statistikk ({cmd}). "
+                f"Unntak: ren count/sum er tillatt."
             )
 
     def _check_stats_args(self, cmd, args, df=None, condition=None):
@@ -7163,9 +7345,56 @@ class MicroInterpreter:
                     )
                 )
                 _n_before = len(df_target) if _row_filter else None
+                # T6: snapshot målkolonner for replace/recode FØR transform
+                _t6_targets = []
+                _t6_snapshots = {}
+                if _is_disclosure_control():
+                    if cmd == 'replace' and isinstance(args, dict):
+                        _tn = args.get('target')
+                        if _tn and _tn in df_target.columns:
+                            _t6_targets.append(_tn)
+                            _t6_snapshots[_tn] = df_target[_tn].copy()
+                    elif cmd == 'recode' and isinstance(args, dict):
+                        for _tn in (args.get('vars') or []):
+                            if _tn and _tn in df_target.columns:
+                                _t6_targets.append(_tn)
+                                _t6_snapshots[_tn] = df_target[_tn].copy()
                 result = self.transform_handler.execute(cmd, df_target, args, opts_copy)
+                # T1: populasjon må være ≥1000 etter keep/drop if
+                if (cmd in ('keep', 'drop') and _row_filter and result is not None
+                        and _is_disclosure_control()):
+                    _n_new = len(result)
+                    if _n_new < _DC_MIN_POPULATION:
+                        self._log(
+                            f"FEIL: {cmd} ville redusere populasjonen til {_n_new} enheter. "
+                            f"microdata.no krever minst {_DC_MIN_POPULATION} enheter per "
+                            f"populasjon. Datasettet er uendret."
+                        )
+                        return
                 if result is not None:
                     self.datasets[self.active_name] = result
+                # T6: sjekk antall påvirkede rader for replace/recode
+                if _t6_targets and _is_disclosure_control():
+                    _df_check = self.datasets[self.active_name]
+                    _n_check = len(_df_check)
+                    _t6_err = None
+                    for _tn in _t6_targets:
+                        if _tn not in _df_check.columns:
+                            continue
+                        _aff = self._count_affected_rows(_t6_snapshots[_tn], _df_check[_tn])
+                        try:
+                            self._check_t6_changes(_n_check, _aff, cmd, _tn)
+                        except ValueError as _e:
+                            _t6_err = (_e, _tn)
+                            break
+                    if _t6_err is not None:
+                        _err, _tn = _t6_err
+                        # Revert: gjenopprett snapshot-verdier
+                        for _t, _snap in _t6_snapshots.items():
+                            if _t in _df_check.columns:
+                                _df_check[_t] = _snap.values
+                        self._log(f"FEIL: {_err}")
+                        return
                 if _row_filter and result is not None:
                     _n_after = len(result)
                     try:
@@ -7208,6 +7437,14 @@ class MicroInterpreter:
                 else:
                     n_keep = max(1, int(n_total * args['fraction']))
                     idx = rng.choice(df_src.index, size=n_keep, replace=False)
+                # T1: sample-resultatet må være ≥1000 enheter
+                if _is_disclosure_control() and n_keep < _DC_MIN_POPULATION:
+                    self._log(
+                        f"FEIL: sample ville redusere populasjonen til {n_keep} enheter. "
+                        f"microdata.no krever minst {_DC_MIN_POPULATION} enheter per "
+                        f"populasjon. Datasettet er uendret."
+                    )
+                    return
                 self.datasets[self.active_name] = df_src.loc[idx].reset_index(drop=True)
                 self._log(f"-> Sample: beholdt {n_keep} av {n_total} observasjoner (seed={args['seed']}).")
                 return
@@ -7340,11 +7577,42 @@ class MicroInterpreter:
             if cmd in ['tabulate', 'tabulate-panel', 'transitions-panel']:
                 run_opts['_label_manager'] = self.label_manager
             if cmd in ['generate', 'aggregate', 'collapse', 'summarize', 'summarize-panel', 'correlate', 'ci', 'anova', 'tabulate', 'tabulate-panel', 'normaltest', 'transitions-panel']:
+                # T7: deskriptiv statistikk krever populasjon ≥10. Unntak: tabulate (frekvenser)
+                # og generate/aggregate/collapse (transformasjoner). Sjekk på df_target som
+                # allerede er filtrert av evt. if-betingelse.
+                _t7_cmds = ('summarize', 'summarize-panel', 'correlate', 'ci', 'anova', 'normaltest')
+                if cmd in _t7_cmds and _is_disclosure_control():
+                    try:
+                        self._check_t7_summarize_pop(len(df_target), cmd)
+                    except ValueError as _t7_err:
+                        self._log(f"FEIL: {_t7_err}")
+                        return
                 # Egen logging for generate / collapse, mer microdata-lignende
                 if cmd == 'generate':
+                    _t6_target = args.get('target') if isinstance(args, dict) else None
+                    _t6_before = (
+                        df_target[_t6_target].copy()
+                        if (_t6_target and _t6_target in df_target.columns)
+                        else None
+                    )
+                    _t6_target_existed = _t6_target in df_target.columns if _t6_target else False
                     result = self.stats_engine.execute(cmd, df_target, args, run_opts)
                     df_after = self.datasets[self.active_name]
                     target = args.get('target')
+                    # T6: sjekk antall påvirkede enheter
+                    if target and target in df_after.columns and _is_disclosure_control():
+                        n_after = len(df_after)
+                        n_affected = self._count_affected_rows(_t6_before, df_after[target])
+                        try:
+                            self._check_t6_changes(n_after, n_affected, 'generate', target)
+                        except ValueError as _t6_err:
+                            # Revert
+                            if _t6_target_existed and _t6_before is not None:
+                                df_after[target] = _t6_before.values
+                            else:
+                                df_after.drop(columns=[target], inplace=True, errors='ignore')
+                            self._log(f"FEIL: {_t6_err}")
+                            return
                     if target and target in df_after.columns:
                         n = len(df_after)
                         try:
