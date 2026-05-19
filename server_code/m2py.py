@@ -1,6 +1,95 @@
 import re
 import math
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Avsløringskontroll (microdata.no-stil sensurering)
+# Når PÅ: matcher microdata.no — pseudonym-validering, type-sjekk, blokker små
+# populasjoner og tabeller, winsoriserer, runder persentiler.
+# Default: PÅ. Også PÅ når flagget mangler (API/script-bruk).
+# ─────────────────────────────────────────────────────────────────────────────
+def _is_disclosure_control():
+    v = globals().get('M2PY_DISCLOSURE_CONTROL', '1')
+    return v in (True, 1, '1', 'true', 'True', 'yes', 'on')
+
+# Bakoverkompatibilitet: tidligere het pseudonym-/type-/for-løkke-sjekkene
+# "streng emulering". Nå er det ett samlet valg.
+_is_strict_emulation = _is_disclosure_control
+
+# Terskler for avsløringskontroll (matcher microdata.no)
+_DC_MIN_POPULATION = 1000        # T1: min populasjon for create-dataset/keep-if
+_DC_MIN_AFFECTED = 10            # T6: min rader påvirket av generate/replace/recode
+_DC_MIN_SUMMARIZE = 10           # T7: min populasjon for summarize
+_DC_TABULATE_LOW_CELL = 5        # T5: celle-frekvenser <5 telles som "lave"
+_DC_TABULATE_LOW_RATIO = 0.5     # T5: >50% lave celler stopper tabellen
+_DC_PERCENTILE_SIG_DIGITS = 3    # T8: signifikante sifre for median/persentiler
+
+# Variabelnavn-mønstre som identifiserer pseudonymer i microdata.no.
+# Bruker disse som backup når metadata mangler eksplisitt is_pseudonym.
+_PSEUDONYM_NAME_SUFFIXES = ('_FNR', '_PERSON_ID', '_PSEUDONYM')
+
+def _meta_is_pseudonym(meta, registry_name=None):
+    """Returnerer True hvis variabelen er en pseudonym i microdata.no."""
+    if isinstance(meta, dict):
+        if meta.get('is_pseudonym'):
+            return True
+        dt = str(meta.get('microdata_datatype', '')).lower()
+        if 'pseudonym' in dt:
+            return True
+    if registry_name:
+        up = str(registry_name).upper()
+        if any(up.endswith(s) for s in _PSEUDONYM_NAME_SUFFIXES):
+            return True
+    return False
+
+def _meta_is_string_type(meta):
+    """Returnerer True hvis variabelen er alfanumerisk (string) i microdata.no."""
+    if not isinstance(meta, dict):
+        return False
+    dt = str(meta.get('microdata_datatype', '')).lower()
+    if 'alfanumerisk' in dt:
+        return True
+    if str(meta.get('data_type', '')).lower() in ('string', 'str', 'text'):
+        return True
+    return False
+
+def _winsorize_series(s, lower=0.01, upper=0.99):
+    """T2: kapp en serie til [lower, upper]-percentilene. Returnerer en kopi
+    der verdier under lower-percentilen settes til lower-grensen, og verdier
+    over upper-percentilen settes til upper-grensen. NaN bevares.
+
+    Brukes ved visning av deskriptiv statistikk og plot. Påvirker IKKE regresjon
+    eller collapse med pseudonym by-key.
+    """
+    try:
+        import pandas as _pd
+        if not _pd.api.types.is_numeric_dtype(s):
+            return s
+        s_clean = s.dropna()
+        # Krever nok obs for at percentilberegningen er meningsfull
+        if len(s_clean) < _DC_MIN_AFFECTED:
+            return s
+        p_lo = s_clean.quantile(lower)
+        p_hi = s_clean.quantile(upper)
+        return s.clip(lower=p_lo, upper=p_hi)
+    except Exception:
+        return s
+
+def _round_to_sig_digits(x, sig=_DC_PERCENTILE_SIG_DIGITS):
+    """Rund x til `sig` signifikante sifre. Håndterer NaN, 0, og inf trygt.
+    Brukes for T8: median og persentiler skal kun vises med 3-sifret nøyaktighet."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return x
+    if x != x or x in (float('inf'), float('-inf')):
+        return x
+    if x == 0:
+        return 0.0
+    ax = abs(x)
+    # Antall desimaler å beholde = sig - 1 - floor(log10(ax))
+    d = sig - 1 - int(math.floor(math.log10(ax)))
+    return round(x, d)
+
 def _smart_float_fmt(x, base_dec):
     """Formater float med base_dec desimaler; øker automatisk for tall < 1."""
     try:
@@ -207,6 +296,17 @@ class MicroParser:
             if m:
                 vars_part = m.group(1).strip().split()
                 return {'vars': vars_part, 'into': m.group(2), 'on': m.group(3)}
+            # Forsøk å fange multi-key forsøk: `merge ... into X on k1 k2` eller
+            # `merge ... into X on (k1 k2)` — S2: reject med klar feilmelding.
+            m_multi = re.match(
+                r"^(.*?)\binto\b\s+(\w+)\s+on\s+\(?\s*([^)]+?)\s*\)?\s*$",
+                remainder.strip(), re.IGNORECASE
+            )
+            if m_multi:
+                on_spec = m_multi.group(3).strip()
+                keys = on_spec.split()
+                if len(keys) > 1:
+                    return {'_multi_key_error': True, 'keys': keys}
             # Gammel syntaks: merge datasett-navn [, on(nøkkel)]
             toks = remainder.strip().split()
             return toks if toks else []
@@ -344,8 +444,18 @@ class MicroParser:
                     return {"raw": remainder, "_for_error":
                             "for-løkke mangler iteratornavn"}
                 spec = spec.strip()
-                if spec.startswith('(') and spec.endswith(')'):
-                    spec = spec[1:-1].strip()
+                # S5: avvis literal parens rundt iterator-spec (microdata.no-syntaks
+                # bruker ikke parens — parentesene i grammatikken er meta-syntaktiske).
+                if _is_strict_emulation() and spec.startswith('(') and spec.endswith(')'):
+                    return {"raw": remainder, "_for_error":
+                            "parentes rundt iterator-listen er ikke gyldig i "
+                            "microdata.no. Skriv f.eks. `for y in 1998:2009` eller "
+                            "`for y in 1998, 1999, 2000` (uten parens)."}
+                # S5: avvis literal ellipsis (...) i verdilisten — bruk range i stedet.
+                if _is_strict_emulation() and '...' in spec:
+                    return {"raw": remainder, "_for_error":
+                            "ellipsis `...` er ikke gyldig i for-løkker i "
+                            "microdata.no. Bruk range-syntax: f.eks. `for y in 1998 : 2009`."}
                 # Top-level komma-split for multi-iterator. For single-iterator
                 # behandles hele spec som én verdiliste.
                 if len(var_names) > 1:
@@ -744,15 +854,32 @@ def _micro_expr_fixup(expr):
     """Oversett microdata-syntaks til gyldig Python:
     - ! → ~ (negasjon), men bevar !=
     - Fjern ledende nuller i heltall: date(2010,01,01) → date(2010,1,1)
-    - Enslig . (manglende verdi) → np.nan
+    - Enslig . (manglende verdi) → np.nan. Tildeling (= .) er gyldig i
+      microdata.no; sammenligning (== . / != . osv.) er IKKE gyldig —
+      bruk sysmiss(x). I streng modus avvises bare sammenligningsformen.
     """
     if not isinstance(expr, str):
         return expr
-    # Steg 0: Erstatt enslige '.' (microdata missing-verdi) med np.nan.
-    # Må ikke ødelegge desimaltall (3.14, .5), attributt-tilgang (df.col),
-    # eller metodekall. Matcher kun '.' som ikke grenser til ord-tegn eller andre punktum.
+    # Steg 0: Sammenligning med `.` (Stata-syntaks `x == .`) er ikke gyldig
+    # i microdata.no — der må man bruke sysmiss(x). Tildeling (= .) er OK.
+    # Matcher `==`/`!=`/`<=`/`>=`/`<`/`>` ved siden av en enslig `.`.
+    _DOT_RE = r'(?<![\w.])\.(?![\w.])'
+    _DOT_COMPARE_RE = (
+        r'(?:==|!=|>=|<=|>|<)\s*\.(?![\w.])'
+        r'|(?<![\w.])\.\s*(?:==|!=|>=|<=|>|<)'
+    )
     if '.' in expr:
-        expr = re.sub(r'(?<![\w.])\.(?![\w.])', 'np.nan', expr)
+        if _is_disclosure_control() and re.search(_DOT_COMPARE_RE, expr):
+            raise ValueError(
+                "Sammenligning med `.` (Stata-syntaks som `x == .`) er ikke "
+                "gyldig i microdata.no. Bruk `sysmiss(x)` for å teste om en "
+                "verdi er missing (f.eks. `drop if sysmiss(x)`). "
+                "Tildeling med `= .` (f.eks. `generate x = .`) er OK."
+            )
+        # Konverter enslige `.` til np.nan slik at både tildeling og
+        # arithmetikk med missing fungerer.
+        if re.search(_DOT_RE, expr):
+            expr = re.sub(_DOT_RE, 'np.nan', expr)
     # Steg 1: fjern ledende nuller utenfor strenger (f.eks. 01 → 1, 007 → 7)
     # Matcher komma/parentes + 0-prefiks + siffer(e), men ikke 0 alene eller 0.noe
     if '0' in expr:
@@ -2926,6 +3053,15 @@ AGG_STAT_ALIAS = {
     'gini': calculate_gini,
 }
 
+# Statistikker som ikke er støttet i microdata.no — avvises i streng modus.
+# `first`/`last` er pandas-konstruksjoner som ikke finnes i prod.
+_REJECTED_COLLAPSE_STATS = {'first', 'last'}
+
+# Statistikker som er gyldige i microdata.no (for feilmeldinger).
+_SUPPORTED_COLLAPSE_STATS_DISPLAY = (
+    'count, sum, mean, sd, median, min, max, p25, p75, gini, iqr, percent'
+)
+
 # ── NPR (Norsk pasientregister) ──────────────────────────────────────────────
 _NPR_ENTITY = 'episode_npr'
 
@@ -3854,6 +3990,26 @@ class StatsEngine:
 
         if cmd == 'collapse':
             by_var = options.get('by')
+            # S1: avvis stat-typer som ikke finnes i microdata.no (streng modus alltid)
+            for t in args['targets']:
+                stat = (t.get('stat') or '').lower()
+                if stat in _REJECTED_COLLAPSE_STATS:
+                    raise ValueError(
+                        f"collapse ({stat}) er ikke støttet i microdata.no. "
+                        f"Støttede statistikker: {_SUPPORTED_COLLAPSE_STATS_DISPLAY}."
+                    )
+            # S2: avvis multi-key by(k1 k2) — microdata.no støtter kun én nøkkel
+            if isinstance(by_var, str) and by_var.strip():
+                by_keys = by_var.strip().split()
+                if len(by_keys) > 1:
+                    raise ValueError(
+                        f"microdata.no støtter bare én nøkkel-variabel i by(). "
+                        f"Fikk {len(by_keys)} ({', '.join(by_keys)}). "
+                        f"Workaround: lag en composite key først:\n"
+                        f"  generate composite = string({by_keys[0]}) ++ \"_\" ++ string({by_keys[1]})\n"
+                        f"  collapse (...) ..., by(composite)"
+                    )
+                by_var = by_keys[0]
             missing = [t['src'] for t in args['targets'] if t['src'] not in df.columns]
             if missing:
                 raise ValueError(
@@ -3880,9 +4036,24 @@ class StatsEngine:
             vars_to_sum = [v for v in vars_to_sum if v in df.columns and pd.api.types.is_numeric_dtype(df[v])]
             if not vars_to_sum:
                 return pd.DataFrame()
+            # T2: winsoriser hver variabel globalt til 1/99-persentilen før
+            # mean/std/min/max beregnes. Persentiler er uendret av winsorisering
+            # (1% og 99% blir kuttverdiene). Påvirker IKKE collapse-aggregering.
+            _dc_on = _is_disclosure_control()
+            _w_cols = (
+                {v: _winsorize_series(df[v]) for v in vars_to_sum}
+                if _dc_on else
+                {v: df[v] for v in vars_to_sum}
+            )
             if by_var and by_var in df.columns:
-                # Gruppert summarize
-                grp = df.groupby(by_var, dropna=False)[vars_to_sum]
+                # Gruppert summarize — bruk winsoriserte kolonner i et arbeids-df
+                if _dc_on:
+                    _df_w = df.copy()
+                    for v in vars_to_sum:
+                        _df_w[v] = _w_cols[v]
+                    grp = _df_w.groupby(by_var, dropna=False)[vars_to_sum]
+                else:
+                    grp = df.groupby(by_var, dropna=False)[vars_to_sum]
                 result = grp.agg(['mean', 'std', 'min', 'max', 'count'])
                 if 'gini' in options:
                     for v in vars_to_sum:
@@ -3893,11 +4064,16 @@ class StatsEngine:
                 return result
             # Bygg statistikk-rader: Gj.snitt, Std.avvik, Antall, persentiler
             col_map = {}
-            col_map['Gj.snitt'] = {v: df[v].mean() for v in vars_to_sum}
-            col_map['Std.avvik'] = {v: df[v].std() for v in vars_to_sum}
+            col_map['Gj.snitt'] = {v: _w_cols[v].mean() for v in vars_to_sum}
+            col_map['Std.avvik'] = {v: _w_cols[v].std() for v in vars_to_sum}
             col_map['Antall'] = {v: df[v].count() for v in vars_to_sum}
+            # T8: persentiler (inkl. median) vises med 3 signifikante sifre når
+            # avsløringskontroll er på. Gjelder ikke gjennomsnitt eller std.
             for pct, label in [(0.01, '1%'), (0.25, '25%'), (0.5, '50%'), (0.75, '75%'), (0.99, '99%')]:
-                col_map[label] = {v: df[v].quantile(pct) for v in vars_to_sum}
+                if _dc_on:
+                    col_map[label] = {v: _round_to_sig_digits(df[v].quantile(pct)) for v in vars_to_sum}
+                else:
+                    col_map[label] = {v: df[v].quantile(pct) for v in vars_to_sum}
             if 'gini' in options:
                 col_map['Gini'] = {v: calculate_gini(df[v]) for v in vars_to_sum}
             if 'iqr' in options:
@@ -4129,6 +4305,27 @@ class StatsEngine:
             if 'rowpct' in options: normalize = 'index'
             elif 'colpct' in options: normalize = 'columns'
             elif 'cellpct' in options: normalize = 'all'
+
+            # T5: avsløringskontroll — stopp tabeller med for mange små celler.
+            # Sjekk på RÅ tellinger, uavhengig av om bruker vil ha prosenter.
+            if _is_disclosure_control():
+                if var2:
+                    _raw_counts = pd.crosstab(df[var1], df[var2], dropna=dropna)
+                else:
+                    _raw_counts = df[var1].value_counts(dropna=not dropna)
+                _flat = _raw_counts.values.flatten() if hasattr(_raw_counts, 'values') else _raw_counts.to_numpy().flatten()
+                _total_cells = len(_flat)
+                if _total_cells > 0:
+                    _low_cells = int((_flat < _DC_TABULATE_LOW_CELL).sum())
+                    _low_ratio = _low_cells / _total_cells
+                    if _low_ratio > _DC_TABULATE_LOW_RATIO:
+                        raise ValueError(
+                            f"Tabellen kan ikke vises pga. for mange små celler "
+                            f"({_low_cells} av {_total_cells} celler har frekvens "
+                            f"<{_DC_TABULATE_LOW_CELL}, dvs. {_low_ratio*100:.0f}% — "
+                            f"grensen er {int(_DC_TABULATE_LOW_RATIO*100)}%). "
+                            f"Reduser antall kategorier eller utvid populasjonen."
+                        )
 
             if var2:
                 ct = pd.crosstab(df[var1], df[var2], normalize=normalize, dropna=dropna,
@@ -5387,6 +5584,9 @@ class PlotHandler:
                               annotations=[dict(text='Ingen data', xref='paper', yref='paper',
                                                 x=0.5, y=0.5, showarrow=False)])
             return fig
+        # T2: winsoriser numerisk data før plot (ikke for diskrete/kategoriske)
+        if _is_disclosure_control() and not discrete and pd.api.types.is_numeric_dtype(s):
+            s = _winsorize_series(s)
         if discrete or not pd.api.types.is_numeric_dtype(s):
             vc = s.value_counts().sort_index()
             if percent:
@@ -5448,18 +5648,25 @@ class PlotHandler:
         over_var = options.get('over')
         lm = options.get('_label_manager')
 
+        # T2: winsoriser numeriske kolonner i en arbeids-df hvis disclosure_control
+        _dc_w = _is_disclosure_control()
+        def _wcol(series):
+            if _dc_w and pd.api.types.is_numeric_dtype(series):
+                return _winsorize_series(series)
+            return series
+
         if len(vars_) > 1:
             # Multiple variables: one box trace per variable, ignore over
             fig = go.Figure()
             for var in vars_:
-                s = df[var].dropna()
+                s = _wcol(df[var]).dropna()
                 if not s.empty:
                     fig.add_trace(go.Box(y=s, name=var))
             fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=60),
                               xaxis_title='', yaxis_title='')
         else:
             var = vars_[0]
-            s = df[var].dropna()
+            s = _wcol(df[var]).dropna()
             if s.empty:
                 return None
             if over_var and over_var in df.columns:
@@ -5467,13 +5674,17 @@ class PlotHandler:
                     fig = go.Figure()
                     for val in sorted(df[over_var].dropna().unique()):
                         label = lm.format_value(over_var, val)
-                        subset = df.loc[df[over_var] == val, var].dropna()
+                        subset = _wcol(df.loc[df[over_var] == val, var]).dropna()
                         if not subset.empty:
                             fig.add_trace(go.Box(y=subset, name=str(label)))
                 else:
-                    fig = px.box(df, x=over_var, y=var)
+                    _df_b = df.copy()
+                    _df_b[var] = _wcol(df[var])
+                    fig = px.box(_df_b, x=over_var, y=var)
             else:
-                fig = px.box(df, y=var)
+                _df_b = df.copy()
+                _df_b[var] = _wcol(df[var])
+                fig = px.box(_df_b, y=var)
             fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=60),
                               xaxis_title=over_var or '', yaxis_title=var)
         return fig
@@ -5493,8 +5704,19 @@ class PlotHandler:
         sub = df[[var_x, var_y]].dropna()
         if sub.empty:
             return None
+        # T2: winsoriser begge akser når avsløringskontroll er på
+        if _is_disclosure_control():
+            if pd.api.types.is_numeric_dtype(sub[var_x]):
+                sub = sub.assign(**{var_x: _winsorize_series(sub[var_x])})
+            if pd.api.types.is_numeric_dtype(sub[var_y]):
+                sub = sub.assign(**{var_y: _winsorize_series(sub[var_y])})
         if by_var and by_var in df.columns:
             sub = df[[var_x, var_y, by_var]].dropna()
+            if _is_disclosure_control():
+                if pd.api.types.is_numeric_dtype(sub[var_x]):
+                    sub = sub.assign(**{var_x: _winsorize_series(sub[var_x])})
+                if pd.api.types.is_numeric_dtype(sub[var_y]):
+                    sub = sub.assign(**{var_y: _winsorize_series(sub[var_y])})
             fig = go.Figure()
             for val in sub[by_var].unique():
                 mask = sub[by_var] == val
@@ -5689,6 +5911,251 @@ class MicroInterpreter:
         """Sett pandas float-format basert på default_decimals (smart: ekstra desimaler for små tall)."""
         dec = int(self.default_decimals)
         pd.options.display.float_format = lambda x: _smart_float_fmt(x, dec)
+
+    # ─── Script-direktiver (// m2py: key=value) ─────────────────────────────
+    # Brukes for å overstyre avsløringskontroll per script. Direktivene leses
+    # før scriptet kjøres og restaureres etterpå, slik at f.eks. en API-konsument
+    # kan kjøre to scripts på rad uten at det ene "lekker" innstilling til neste.
+    _DIRECTIVE_RE = re.compile(
+        r'^\s*//\s*m2py\s*:\s*([\w-]+)\s*=\s*(\S+)\s*$', re.IGNORECASE
+    )
+    _DIRECTIVE_TRUTHY = ('on', 'true', '1', 'yes', 'pa', 'på')
+    _DIRECTIVE_FALSY  = ('off', 'false', '0', 'no', 'av')
+
+    def _apply_script_directives(self, script_text):
+        """Skann scriptet etter // m2py: <key>=<value>-linjer og mut globalen
+        deretter. Returner dict med opprinnelige verdier som skal gjenopprettes."""
+        saved = {}
+        for raw in script_text.splitlines():
+            m = self._DIRECTIVE_RE.match(raw)
+            if not m:
+                continue
+            key = m.group(1).lower()
+            val = m.group(2).lower().strip(';,')
+            if key in ('disclosure-control', 'disclosurecontrol', 'dc'):
+                global_name = 'M2PY_DISCLOSURE_CONTROL'
+            else:
+                # Ukjent direktiv — logg en advarsel og hopp over
+                self._log(f"// m2py: ukjent direktiv '{key}' — ignorert")
+                continue
+            new_val = (
+                '1' if val in self._DIRECTIVE_TRUTHY else
+                '0' if val in self._DIRECTIVE_FALSY else None
+            )
+            if new_val is None:
+                self._log(f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)")
+                continue
+            if global_name not in saved:
+                saved[global_name] = globals().get(global_name, '1')
+            globals()[global_name] = new_val
+            self._log(
+                f"// m2py: disclosure-control = "
+                f"{'PÅ' if new_val == '1' else 'AV'} (satt fra script-direktiv)"
+            )
+        return saved
+
+    def _restore_script_directives(self, saved):
+        """Gjenopprett globaler etter at scriptet er ferdig (uansett om det
+        feilet eller fullførte)."""
+        for key, old_val in saved.items():
+            globals()[key] = old_val
+
+    # ─── Streng-emulering: metadata-oppslag for kolonner ────────────────────
+    def _lookup_var_meta(self, colname):
+        """Slå opp metadata-dict for en kolonne (alias eller registry-navn)."""
+        if not colname:
+            return {}
+        cat = getattr(self.data_engine, 'catalog', {}) or {}
+        short = getattr(self.data_engine, '_catalog_by_short', {}) or {}
+        if colname in cat:
+            return cat[colname]
+        if colname in short:
+            return short[colname]
+        reg = getattr(self.label_manager, 'var_alias_to_path', {}).get(colname)
+        if reg:
+            if reg in cat:
+                return cat[reg]
+            rshort = reg.split('/')[-1]
+            if rshort in short:
+                return short[rshort]
+        return {}
+
+    def _registry_name_for(self, colname):
+        """Returner registry-navn (path) for en kolonne hvis kjent, ellers selve navnet."""
+        if not colname:
+            return colname
+        reg = getattr(self.label_manager, 'var_alias_to_path', {}).get(colname)
+        return reg or colname
+
+    def _is_pseudonym_col(self, colname):
+        """True hvis kolonnen er en pseudonym-variabel (kun i strict mode)."""
+        if not _is_strict_emulation():
+            return False
+        meta = self._lookup_var_meta(colname)
+        reg = self._registry_name_for(colname)
+        return _meta_is_pseudonym(meta, registry_name=reg)
+
+    def _is_string_col(self, colname):
+        """True hvis kolonnen er deklarert som alfanumerisk i metadata."""
+        meta = self._lookup_var_meta(colname)
+        return _meta_is_string_type(meta)
+
+    def _check_not_pseudonym(self, colname, context):
+        """Reiser ValueError hvis colname er pseudonym (med klar feilmelding).
+        context: kort beskrivelse av operasjonen, f.eks. 'generate', 'sammenligning'.
+        """
+        if self._is_pseudonym_col(colname):
+            raise ValueError(
+                f"{colname} er en pseudonymvariabel og kan ikke brukes i {context}. "
+                f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+            )
+
+    def _check_numeric_var(self, colname, op):
+        """Reiser ValueError hvis colname er alfanumerisk i metadata (kun strict mode).
+        op: navn på operasjonen, f.eks. 'mean', 'sammenligning', 'sum'.
+        """
+        if not _is_strict_emulation():
+            return
+        if self._is_string_col(colname):
+            raise ValueError(
+                f"{colname} er en strengvariabel (alfanumerisk) i microdata.no — "
+                f"operasjonen '{op}' krever en numerisk variabel. "
+                f"Bruk frekvens/count i stedet (f.eks. tabulate)."
+            )
+
+    # ─── Avsløringskontroll (T1, T5, T6, T7, T8) ───────────────────────────
+    def _count_affected_rows(self, before_series, after_series):
+        """Antall rader der verdien har endret seg (NaN-konsistent).
+        before_series kan være None (= ny kolonne, alle non-NaN er endret).
+        """
+        import pandas as _pd
+        if after_series is None:
+            return 0
+        if before_series is None:
+            # Ny kolonne: en rad er "endret" hvis den fikk en ikke-NaN verdi
+            return int(after_series.notna().sum())
+        # Behandle NaN-rader: NaN == NaN regnes som uendret
+        b = before_series.reset_index(drop=True)
+        a = after_series.reset_index(drop=True)
+        # Match lengder
+        n = min(len(b), len(a))
+        b = b.iloc[:n]; a = a.iloc[:n]
+        changed = ((b != a) & ~(b.isna() & a.isna()))
+        return int(changed.sum())
+
+    def _check_t6_changes(self, n_total, n_affected, cmd, target_name):
+        """T6: avvis hvis endringer påvirker 1-9 rader, eller alle bortsett fra <10."""
+        if not _is_disclosure_control():
+            return
+        if n_total <= 0:
+            return
+        # Unntak: 0 eller alle rader endret = OK
+        if n_affected == 0 or n_affected == n_total:
+            return
+        # Forbudt: 1-9 endret
+        if 0 < n_affected < _DC_MIN_AFFECTED:
+            raise ValueError(
+                f"{cmd} '{target_name}' påvirker bare {n_affected} av {n_total} enheter. "
+                f"microdata.no tillater ikke endringer som påvirker færre enn "
+                f"{_DC_MIN_AFFECTED} enheter (unntak: alle eller ingen)."
+            )
+        # Forbudt: alle bortsett fra <10 (dvs. n - affected ∈ 1..9)
+        n_unchanged = n_total - n_affected
+        if 0 < n_unchanged < _DC_MIN_AFFECTED:
+            raise ValueError(
+                f"{cmd} '{target_name}' lar bare {n_unchanged} av {n_total} enheter være "
+                f"uendret. microdata.no tillater ikke endringer som påvirker alle bortsett "
+                f"fra færre enn {_DC_MIN_AFFECTED} enheter."
+            )
+
+    def _check_t1_population(self, n, context):
+        """T1: avvis hvis populasjonen er <1000 enheter."""
+        if not _is_disclosure_control():
+            return
+        if n < _DC_MIN_POPULATION:
+            raise ValueError(
+                f"Populasjonen er {n} enheter ({context}). microdata.no tillater ikke "
+                f"populasjoner med færre enn {_DC_MIN_POPULATION} enheter."
+            )
+
+    def _check_t7_summarize_pop(self, n, cmd):
+        """T7: avvis deskriptiv statistikk på populasjoner <10."""
+        if not _is_disclosure_control():
+            return
+        if n < _DC_MIN_SUMMARIZE:
+            raise ValueError(
+                f"Populasjonen er {n} enheter. microdata.no krever minst "
+                f"{_DC_MIN_SUMMARIZE} enheter for deskriptiv statistikk ({cmd}). "
+                f"Unntak: ren count/sum er tillatt."
+            )
+
+    def _check_stats_args(self, cmd, args, df=None, condition=None):
+        """S3 + T-3: valider variable-args for stat-kommandoer før dispatch.
+        Avviser numeriske operasjoner på alfanumeriske variabler, og bruk av
+        pseudonymer i analyse-/transformasjons-kommandoer."""
+        if not _is_strict_emulation():
+            return
+        # Stat-operasjoner som krever numerisk variabel
+        _NUMERIC_STATS = {'sum', 'mean', 'sd', 'std', 'median', 'min', 'max',
+                          'p25', 'p75', 'percent', 'gini', 'iqr', 'sem',
+                          'semean', 'sebinomial'}
+        # Kommandoer som er rene analyser (krever ikke-pseudonym variabler)
+        _ANALYSIS_CMDS = {'summarize', 'correlate', 'ci', 'anova', 'normaltest',
+                          'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                          'regress-panel', 'ivregress'}
+
+        def _maybe_check_pseudonym(varname):
+            if self._is_pseudonym_col(varname):
+                raise ValueError(
+                    f"{varname} er en pseudonymvariabel og kan ikke brukes i {cmd}. "
+                    f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                )
+
+        def _check_expr_for_pseudonyms(expr):
+            """Pluk ut identifikatorer fra et uttrykk og sjekk om noen er pseudonym-kolonner."""
+            if not isinstance(expr, str) or df is None:
+                return
+            cols = set(df.columns) if hasattr(df, 'columns') else set()
+            # Plukk ut bare identifikatorer som matcher kolonner i datasettet
+            for ident in set(re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', expr)):
+                if ident in cols and self._is_pseudonym_col(ident):
+                    raise ValueError(
+                        f"{ident} er en pseudonymvariabel og kan ikke brukes i {cmd}-uttrykk. "
+                        f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                    )
+
+        if cmd in ('collapse', 'aggregate') and isinstance(args, dict):
+            for t in args.get('targets', []):
+                src = t.get('src')
+                stat = (t.get('stat') or '').lower()
+                if src and stat in _NUMERIC_STATS:
+                    self._check_numeric_var(src, stat)
+                # Pseudonym kan ikke brukes som src for collapse-stat (kun som by)
+                if src:
+                    _maybe_check_pseudonym(src)
+        elif cmd in _ANALYSIS_CMDS:
+            # args kan være liste eller dict
+            vars_list = []
+            if isinstance(args, (list, tuple)):
+                vars_list = list(args)
+            elif isinstance(args, dict):
+                vars_list = list(args.get('vars', [])) or []
+                for k in ('dep', 'runvar'):
+                    v = args.get(k)
+                    if v:
+                        vars_list.append(v)
+                for k in ('exog', 'endog', 'instruments'):
+                    vs = args.get(k) or []
+                    vars_list.extend(vs)
+            for v in vars_list:
+                if isinstance(v, str) and v:
+                    self._check_numeric_var(v, cmd)
+                    _maybe_check_pseudonym(v)
+        elif cmd in ('generate', 'replace') and isinstance(args, dict):
+            _check_expr_for_pseudonyms(args.get('expression', ''))
+        # keep/drop med betingelse: sjekk condition-strengen
+        if cmd in ('keep', 'drop') and condition:
+            _check_expr_for_pseudonyms(condition)
 
     def sync_datasets_to_globals(self, g):
         """Binder self.datasets til et exec-globals dict (Pyodide): datasets, active_name, active_df, og ett navn per gyldig identifier."""
@@ -6080,6 +6547,13 @@ class MicroInterpreter:
 
     def run_script(self, script_text, echo_commands=None):
         script_text = self.parser.preprocess_script(script_text)
+        _directive_saved = self._apply_script_directives(script_text)
+        try:
+            return self._run_script_body(script_text, echo_commands)
+        finally:
+            self._restore_script_directives(_directive_saved)
+
+    def _run_script_body(self, script_text, echo_commands=None):
         lines = script_text.split('\n')
         echo = self.echo_commands if echo_commands is None else bool(echo_commands)
         # Callback for å yield mellom kommandoer (Pyodide: lar nettleseren oppdatere UI)
@@ -6187,6 +6661,14 @@ class MicroInterpreter:
         """Async versjon av run_script som yielder mellom kommandoer (for Pyodide/nettleser)."""
         import asyncio
         script_text = self.parser.preprocess_script(script_text)
+        _directive_saved = self._apply_script_directives(script_text)
+        try:
+            return await self._run_script_async_body(script_text, echo_commands)
+        finally:
+            self._restore_script_directives(_directive_saved)
+
+    async def _run_script_async_body(self, script_text, echo_commands=None):
+        import asyncio
         lines = script_text.split('\n')
         echo = self.echo_commands if echo_commands is None else bool(echo_commands)
         _cmd_count = 0
@@ -6572,6 +7054,23 @@ class MicroInterpreter:
                     )
                     return
 
+            # S3 + T-3 (streng emulering): valider variabeltyper og pseudonymer
+            # for kommandoer der det er meningsfullt. Aktivt datasett ikke alltid satt.
+            _strict_check_cmds = (
+                'collapse', 'aggregate', 'summarize', 'correlate', 'ci', 'anova',
+                'normaltest', 'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                'regress-panel', 'ivregress', 'generate', 'replace', 'keep', 'drop'
+            )
+            if cmd in _strict_check_cmds:
+                _strict_df = None
+                if self.active_name and self.active_name in self.datasets:
+                    _strict_df = self.datasets[self.active_name]
+                try:
+                    self._check_stats_args(cmd, args, df=_strict_df, condition=cond)
+                except ValueError as _strict_err:
+                    self._log(f"FEIL: {_strict_err}")
+                    return
+
             # 1. Globale/Sesjons-kommandoer
             if cmd == 'create-dataset':
                 self.datasets[args[0]] = pd.DataFrame()
@@ -6643,6 +7142,17 @@ class MicroInterpreter:
                 return
 
             if cmd == 'merge':
+                # S2: avvis multi-key merge — microdata.no støtter bare én nøkkel
+                if isinstance(args, dict) and args.get('_multi_key_error'):
+                    keys = args.get('keys', [])
+                    self._log(
+                        f"FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
+                        f"Fikk {len(keys)} ({', '.join(keys)}). "
+                        f"Workaround: lag en composite key først:\n"
+                        f"  generate composite = string({keys[0]}) ++ \"_\" ++ string({keys[1]})\n"
+                        f"  merge ... into <ds> on composite"
+                    )
+                    return
                 # --- Ny syntaks: merge var-list into dataset [on variable] ---
                 if isinstance(args, dict) and 'into' in args:
                     into_name = args['into']
@@ -6773,6 +7283,17 @@ class MicroInterpreter:
                 _active_entity = self.dataset_entity_types.get(self.active_name, 'person')
                 _default_key   = _ENTITY_ID_COL.get(_active_entity, 'unit_id')
                 on_opt = opts.get('on', _default_key)
+                # S2: avvis multi-key også i gammel syntaks
+                if isinstance(on_opt, str) and len(on_opt.split()) > 1:
+                    _keys = on_opt.split()
+                    self._log(
+                        f"FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
+                        f"Fikk {len(_keys)} ({', '.join(_keys)}). "
+                        f"Workaround: lag en composite key først:\n"
+                        f"  generate composite = string({_keys[0]}) ++ \"_\" ++ string({_keys[1]})\n"
+                        f"  merge {args[0]}, on(composite)"
+                    )
+                    return
                 on_cols = on_opt.split() if isinstance(on_opt, str) else list(on_opt)
                 on_cols = [c for c in on_cols if c in self.active_df.columns and c in target_df.columns]
                 if not on_cols:
@@ -6904,9 +7425,56 @@ class MicroInterpreter:
                     )
                 )
                 _n_before = len(df_target) if _row_filter else None
+                # T6: snapshot målkolonner for replace/recode FØR transform
+                _t6_targets = []
+                _t6_snapshots = {}
+                if _is_disclosure_control():
+                    if cmd == 'replace' and isinstance(args, dict):
+                        _tn = args.get('target')
+                        if _tn and _tn in df_target.columns:
+                            _t6_targets.append(_tn)
+                            _t6_snapshots[_tn] = df_target[_tn].copy()
+                    elif cmd == 'recode' and isinstance(args, dict):
+                        for _tn in (args.get('vars') or []):
+                            if _tn and _tn in df_target.columns:
+                                _t6_targets.append(_tn)
+                                _t6_snapshots[_tn] = df_target[_tn].copy()
                 result = self.transform_handler.execute(cmd, df_target, args, opts_copy)
+                # T1: populasjon må være ≥1000 etter keep/drop if
+                if (cmd in ('keep', 'drop') and _row_filter and result is not None
+                        and _is_disclosure_control()):
+                    _n_new = len(result)
+                    if _n_new < _DC_MIN_POPULATION:
+                        self._log(
+                            f"FEIL: {cmd} ville redusere populasjonen til {_n_new} enheter. "
+                            f"microdata.no krever minst {_DC_MIN_POPULATION} enheter per "
+                            f"populasjon. Datasettet er uendret."
+                        )
+                        return
                 if result is not None:
                     self.datasets[self.active_name] = result
+                # T6: sjekk antall påvirkede rader for replace/recode
+                if _t6_targets and _is_disclosure_control():
+                    _df_check = self.datasets[self.active_name]
+                    _n_check = len(_df_check)
+                    _t6_err = None
+                    for _tn in _t6_targets:
+                        if _tn not in _df_check.columns:
+                            continue
+                        _aff = self._count_affected_rows(_t6_snapshots[_tn], _df_check[_tn])
+                        try:
+                            self._check_t6_changes(_n_check, _aff, cmd, _tn)
+                        except ValueError as _e:
+                            _t6_err = (_e, _tn)
+                            break
+                    if _t6_err is not None:
+                        _err, _tn = _t6_err
+                        # Revert: gjenopprett snapshot-verdier
+                        for _t, _snap in _t6_snapshots.items():
+                            if _t in _df_check.columns:
+                                _df_check[_t] = _snap.values
+                        self._log(f"FEIL: {_err}")
+                        return
                 if _row_filter and result is not None:
                     _n_after = len(result)
                     try:
@@ -6949,6 +7517,14 @@ class MicroInterpreter:
                 else:
                     n_keep = max(1, int(n_total * args['fraction']))
                     idx = rng.choice(df_src.index, size=n_keep, replace=False)
+                # T1: sample-resultatet må være ≥1000 enheter
+                if _is_disclosure_control() and n_keep < _DC_MIN_POPULATION:
+                    self._log(
+                        f"FEIL: sample ville redusere populasjonen til {n_keep} enheter. "
+                        f"microdata.no krever minst {_DC_MIN_POPULATION} enheter per "
+                        f"populasjon. Datasettet er uendret."
+                    )
+                    return
                 self.datasets[self.active_name] = df_src.loc[idx].reset_index(drop=True)
                 self._log(f"-> Sample: beholdt {n_keep} av {n_total} observasjoner (seed={args['seed']}).")
                 return
@@ -7081,11 +7657,42 @@ class MicroInterpreter:
             if cmd in ['tabulate', 'tabulate-panel', 'transitions-panel']:
                 run_opts['_label_manager'] = self.label_manager
             if cmd in ['generate', 'aggregate', 'collapse', 'summarize', 'summarize-panel', 'correlate', 'ci', 'anova', 'tabulate', 'tabulate-panel', 'normaltest', 'transitions-panel']:
+                # T7: deskriptiv statistikk krever populasjon ≥10. Unntak: tabulate (frekvenser)
+                # og generate/aggregate/collapse (transformasjoner). Sjekk på df_target som
+                # allerede er filtrert av evt. if-betingelse.
+                _t7_cmds = ('summarize', 'summarize-panel', 'correlate', 'ci', 'anova', 'normaltest')
+                if cmd in _t7_cmds and _is_disclosure_control():
+                    try:
+                        self._check_t7_summarize_pop(len(df_target), cmd)
+                    except ValueError as _t7_err:
+                        self._log(f"FEIL: {_t7_err}")
+                        return
                 # Egen logging for generate / collapse, mer microdata-lignende
                 if cmd == 'generate':
+                    _t6_target = args.get('target') if isinstance(args, dict) else None
+                    _t6_before = (
+                        df_target[_t6_target].copy()
+                        if (_t6_target and _t6_target in df_target.columns)
+                        else None
+                    )
+                    _t6_target_existed = _t6_target in df_target.columns if _t6_target else False
                     result = self.stats_engine.execute(cmd, df_target, args, run_opts)
                     df_after = self.datasets[self.active_name]
                     target = args.get('target')
+                    # T6: sjekk antall påvirkede enheter
+                    if target and target in df_after.columns and _is_disclosure_control():
+                        n_after = len(df_after)
+                        n_affected = self._count_affected_rows(_t6_before, df_after[target])
+                        try:
+                            self._check_t6_changes(n_after, n_affected, 'generate', target)
+                        except ValueError as _t6_err:
+                            # Revert
+                            if _t6_target_existed and _t6_before is not None:
+                                df_after[target] = _t6_before.values
+                            else:
+                                df_after.drop(columns=[target], inplace=True, errors='ignore')
+                            self._log(f"FEIL: {_t6_err}")
+                            return
                     if target and target in df_after.columns:
                         n = len(df_after)
                         try:
