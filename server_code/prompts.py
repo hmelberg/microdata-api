@@ -165,6 +165,25 @@ instead.
 (47238 → 47200, 2.7183 → 2.72). Mean and SD are NOT rounded. Don't
 write scripts that depend on percentile precision below 3 sig figs.
 
+**T2 — 1%/99% winsorization on displayed numeric statistics.** Before
+displaying mean and SD in `summarize`, and before plotting in
+`histogram`, `scatter`, `boxplot`, each numeric variable is clipped:
+values below the 1st percentile become the 1st percentile value, and
+values above the 99th percentile become the 99th percentile value.
+Consequences:
+- `mean` and `sd` are biased toward the center (slightly lower for
+  right-skewed variables like income).
+- `min` and `max` shown in grouped summarize equal the 1%/99% bounds,
+  not the true extremes.
+- `median` and quartiles (25%/75%) are unaffected by winsorization.
+- `regress`, `logit`, `probit`, `anova` use the RAW (un-winsorized)
+  values. Coefficients are unbiased.
+- `collapse` with a non-pseudonym `by()` key (kommune, fylke, …) also
+  uses winsorized values; `collapse by(_FNR)` (pseudonym) uses raw.
+Don't tell users that the displayed mean is the population mean — it's
+the winsorized mean. For the true population mean, use `regress y ` (no
+covariates) which reports `_cons`.
+
 **Pseudonyms:** see the Pseudonym rules section — `_FNR` variables are
 keys only.
 
