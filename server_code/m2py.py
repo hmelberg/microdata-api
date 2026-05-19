@@ -854,15 +854,29 @@ def _micro_expr_fixup(expr):
     """Oversett microdata-syntaks til gyldig Python:
     - ! → ~ (negasjon), men bevar !=
     - Fjern ledende nuller i heltall: date(2010,01,01) → date(2010,1,1)
-    - Enslig . (manglende verdi) → np.nan
+    - Enslig . (Stata-syntaks for manglende verdi) — avvises i streng modus.
     """
     if not isinstance(expr, str):
         return expr
-    # Steg 0: Erstatt enslige '.' (microdata missing-verdi) med np.nan.
-    # Må ikke ødelegge desimaltall (3.14, .5), attributt-tilgang (df.col),
-    # eller metodekall. Matcher kun '.' som ikke grenser til ord-tegn eller andre punktum.
-    if '.' in expr:
-        expr = re.sub(r'(?<![\w.])\.(?![\w.])', 'np.nan', expr)
+    # Steg 0: Avvis enslige '.' (Stata-syntaks for manglende verdi).
+    # microdata.no støtter ikke `.` som litteral missing-verdi. Bruk
+    # `sysmiss(x)` for å teste, eller `generate x = ... if cond` for å
+    # lage variabler med missing der betingelsen ikke holder.
+    # Matcher kun '.' som ikke grenser til ord-tegn eller andre punktum,
+    # slik at desimaltall (3.14), attributt-tilgang (df.col) og dato-
+    # uttrykk (date_fmt(...)) ikke trigger.
+    _DOT_RE = r'(?<![\w.])\.(?![\w.])'
+    if '.' in expr and re.search(_DOT_RE, expr):
+        if _is_disclosure_control():
+            raise ValueError(
+                "`.` (Stata-syntaks for missing-verdi) er ikke gyldig i microdata.no. "
+                "Bruk `sysmiss(x)` for å teste om en verdi er missing "
+                "(f.eks. `drop if sysmiss(x)`), eller "
+                "`generate x = uttrykk if cond` for å gi missing-verdier "
+                "der betingelsen ikke holder."
+            )
+        # Disclosure-control av: behold lenient Stata-kompat-oppførsel
+        expr = re.sub(_DOT_RE, 'np.nan', expr)
     # Steg 1: fjern ledende nuller utenfor strenger (f.eks. 01 → 1, 007 → 7)
     # Matcher komma/parentes + 0-prefiks + siffer(e), men ikke 0 alene eller 0.noe
     if '0' in expr:
