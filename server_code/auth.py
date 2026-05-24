@@ -115,6 +115,43 @@ def issue_magic_code(email: str) -> str:
     return code
 
 
+def issue_shared_code(
+    label: str,
+    expires_days: int = 3,
+    max_uses: int | None = None,
+) -> dict:
+    """Issue a shared access code that any number of users can use to log in
+    anonymously (no email, no user record). Returns the code and metadata.
+
+    Codes are stored with kind='shared'. The `label` is for admin's internal
+    tracking (e.g., 'workshop-2026-06-15'). max_uses=None means unlimited.
+    """
+    rng = secrets.SystemRandom()
+    code = "-".join(rng.choice(eff_wordlist.EFF_WORDS) for _ in range(3))
+    expires = _utcnow() + dt.timedelta(days=expires_days)
+    app_tables.auth_tokens.add_row(
+        user=None,
+        token_hash=_hash_token(code),
+        kind="shared",
+        created=_utcnow(),
+        expires=expires,
+        last_used=None,
+        user_agent="",
+        ip="",
+        revoked=False,
+        magic_email=None,
+        shared_label=label.strip(),       # auto-create column
+        shared_max_uses=max_uses,          # auto-create column; None means unlimited
+        shared_use_count=0,               # auto-create column
+    )
+    return {
+        "code": code,
+        "expires_at": expires,
+        "max_uses": max_uses,
+        "label": label.strip(),
+    }
+
+
 def _normalize_magic_code(raw: str) -> str:
     """Normalize a magic code for verification: lowercase, replace any run of
     non-alpha characters with a single hyphen.
@@ -128,22 +165,50 @@ def _normalize_magic_code(raw: str) -> str:
     return s
 
 
-def consume_magic_code(raw: str) -> str | None:
-    """Validate a magic code; return the email it was issued for, or None.
-    Multi-use: does NOT revoke after use. Just updates last_used."""
+def consume_magic_code(raw: str) -> dict | None:
+    """Validate a magic or shared code; return info about the redemption.
+
+    BREAKING SIGNATURE CHANGE: previously returned str | None (the email).
+    Now returns dict | None. auth_endpoints.py /auth/email/verify must be
+    updated to use result['kind'] / result['email'] instead of treating the
+    return value as a plain email string (tracked in M5-T3).
+
+    Returns:
+        {'kind': 'magic', 'email': str}      — regular per-user magic code
+        {'kind': 'shared', 'label': str}     — admin-issued shared code
+        None                                  — invalid/expired/revoked
+    """
     normalized = _normalize_magic_code(raw)
     if not normalized:
         return None
-    row = _safe_get(app_tables.auth_tokens, token_hash=_hash_token(normalized), kind="magic")
-    if row is None:
-        return None
-    if row["revoked"]:
-        return None
-    if row["expires"] and row["expires"] < _utcnow():
-        return None
-    email = row["magic_email"]
-    row["last_used"] = _utcnow()
-    return email
+    token_hash = _hash_token(normalized)
+
+    # Try magic kind first (more common)
+    row = _safe_get(app_tables.auth_tokens, token_hash=token_hash, kind="magic")
+    if row is not None:
+        if row["revoked"]:
+            return None
+        if row["expires"] and row["expires"] < _utcnow():
+            return None
+        row["last_used"] = _utcnow()
+        return {"kind": "magic", "email": row["magic_email"]}
+
+    # Try shared kind
+    row = _safe_get(app_tables.auth_tokens, token_hash=token_hash, kind="shared")
+    if row is not None:
+        if row["revoked"]:
+            return None
+        if row["expires"] and row["expires"] < _utcnow():
+            return None
+        max_uses = row.get("shared_max_uses")
+        use_count = row.get("shared_use_count") or 0
+        if max_uses is not None and use_count >= max_uses:
+            return None  # used up
+        row["shared_use_count"] = use_count + 1
+        row["last_used"] = _utcnow()
+        return {"kind": "shared", "label": row.get("shared_label") or "(uten etikett)"}
+
+    return None
 
 
 def lookup_session_token(raw: str):
