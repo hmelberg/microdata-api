@@ -176,3 +176,74 @@ def http_auth_logout():
     # Always return ok — logout is idempotent; an invalid token still
     # results in "you are not logged in" from the client's perspective.
     return _json({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# /admin/shared-codes/issue
+
+
+@anvil.server.http_endpoint(
+    "/admin/shared-codes/issue", methods=["POST"],
+    cross_site_session=False, enable_cors=True,
+)
+def http_admin_issue_shared_code():
+    """Admin-only: issue a shared access code that any number of users can
+    use to log in anonymously. Returns the generated code + metadata.
+
+    Body:
+        {
+            "label": "workshop-2026-06-15",
+            "expires_days": 3,           // optional, default 3
+            "max_uses": 25               // optional, null = unlimited
+        }
+
+    Response 200:
+        {
+            "code": "abacus-charity-twelve",
+            "expires_at": "2026-05-28T12:00:00+00:00",
+            "max_uses": 25,
+            "label": "workshop-2026-06-15"
+        }
+
+    Response 401: not authenticated
+    Response 403: authenticated but not admin
+    Response 400: invalid input
+    """
+    try:
+        principal, err = auth.authenticate_or_fail()
+        if err:
+            return err
+        user = auth.principal_user(principal)
+        if user is None or not user["is_admin"]:
+            return _json({"error": "admin access required"}, status=403)
+
+        body = _load_body()
+        label = (body.get("label") or "").strip()
+        if not label:
+            return _json({"error": "missing label"}, status=400)
+        if len(label) > 100:
+            return _json({"error": "label too long (max 100 chars)"}, status=400)
+
+        expires_days = body.get("expires_days", 3)
+        if not isinstance(expires_days, int) or expires_days < 1 or expires_days > 365:
+            return _json({"error": "expires_days must be int between 1 and 365"}, status=400)
+
+        max_uses = body.get("max_uses")
+        if max_uses is not None:
+            if not isinstance(max_uses, int) or max_uses < 1 or max_uses > 10000:
+                return _json({"error": "max_uses must be null or int between 1 and 10000"}, status=400)
+
+        result = auth.issue_shared_code(label, expires_days=expires_days, max_uses=max_uses)
+        # expires_at is datetime — serialize to ISO string
+        return _json({
+            "code": result["code"],
+            "expires_at": result["expires_at"].isoformat(),
+            "max_uses": result["max_uses"],
+            "label": result["label"],
+        })
+    except Exception as exc:
+        try:
+            print(f"[admin/shared-codes/issue] failed: {exc!r}")
+        except Exception:
+            pass
+        return _json({"error": "issue failed: " + str(exc)[:200]}, status=500)
