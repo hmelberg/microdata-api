@@ -22,6 +22,7 @@ from anvil.server import HttpResponse
 from anvil.tables import app_tables
 
 import utils
+from . import eff_wordlist
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +41,8 @@ def _json(body: dict, status: int = 200) -> HttpResponse:
 # Token generation / lookup
 
 SESSION_TOKEN_TTL_DAYS = 30
-MAGIC_TOKEN_TTL_MINUTES = 15
+MAGIC_TOKEN_TTL_MINUTES = 15  # kept for reference; new codes use MAGIC_CODE_TTL_DAYS
+MAGIC_CODE_TTL_DAYS = 30      # multi-use codes valid for 30 days
 SESSION_PREFIX = "mdapi_"
 
 
@@ -85,15 +87,22 @@ def issue_session_token(user, request_meta: dict | None = None) -> tuple[str, dt
 
 
 def issue_magic_code(email: str) -> str:
-    """Issue a single-use code tied to an email. Stored without a user link
-    yet — verify_magic_code creates/finds the user row at exchange time so
-    the whitelist match happens on confirmed email.
+    """Issue a multi-use magic code tied to an email. Returns a 3-word
+    code (EFF Large Wordlist, hyphen-separated, ~39 bits entropy).
+
+    Codes are valid for 30 days and can be used multiple times. Each use
+    updates last_used. Codes are revoked manually via revoke_session_token
+    or naturally expire.
+
+    Whitelist match happens on confirmed email at first redemption time
+    (in find_or_create_user).
     """
-    raw = secrets.token_urlsafe(24)
-    expires = _utcnow() + dt.timedelta(minutes=MAGIC_TOKEN_TTL_MINUTES)
+    rng = secrets.SystemRandom()
+    code = "-".join(rng.choice(eff_wordlist.EFF_WORDS) for _ in range(3))
+    expires = _utcnow() + dt.timedelta(days=MAGIC_CODE_TTL_DAYS)
     app_tables.auth_tokens.add_row(
         user=None,
-        token_hash=_hash_token(raw),
+        token_hash=_hash_token(code),
         kind="magic",
         created=_utcnow(),
         expires=expires,
@@ -101,15 +110,31 @@ def issue_magic_code(email: str) -> str:
         user_agent="",
         ip="",
         revoked=False,
-        magic_email=email.lower().strip(),  # auto-create column
+        magic_email=email.lower().strip(),
     )
-    return raw
+    return code
+
+
+def _normalize_magic_code(raw: str) -> str:
+    """Normalize a magic code for verification: lowercase, replace any run of
+    non-alpha characters with a single hyphen.
+
+    So 'Abacus Charity Twelve' → 'abacus-charity-twelve'
+    and 'abacus-charity-twelve' → 'abacus-charity-twelve' (unchanged).
+    """
+    s = raw.lower().strip()
+    s = re.sub(r"[^a-z]+", "-", s)
+    s = s.strip("-")
+    return s
 
 
 def consume_magic_code(raw: str) -> str | None:
     """Validate a magic code; return the email it was issued for, or None.
-    Marks the row revoked (single-use)."""
-    row = _safe_get(app_tables.auth_tokens, token_hash=_hash_token(raw), kind="magic")
+    Multi-use: does NOT revoke after use. Just updates last_used."""
+    normalized = _normalize_magic_code(raw)
+    if not normalized:
+        return None
+    row = _safe_get(app_tables.auth_tokens, token_hash=_hash_token(normalized), kind="magic")
     if row is None:
         return None
     if row["revoked"]:
@@ -117,7 +142,6 @@ def consume_magic_code(raw: str) -> str | None:
     if row["expires"] and row["expires"] < _utcnow():
         return None
     email = row["magic_email"]
-    row["revoked"] = True
     row["last_used"] = _utcnow()
     return email
 
@@ -350,20 +374,24 @@ def send_magic_link_email(email: str, code: str, *, lang: str = "no") -> None:
         subject = "Sign in to Microdata Script Runner"
         html = (
             "<p>Hi,</p>"
-            "<p>Click the link below to sign in. The link expires in 15 minutes "
-            "and can only be used once.</p>"
+            "<p>Click the link below to sign in, or copy your 3-word code and "
+            "paste it on any machine. The code is valid for 30 days and can be "
+            "used multiple times.</p>"
             f"<p><a href=\"{url}\">Sign in to Microdata Script Runner</a></p>"
             f"<p>Or paste this URL: <code>{url}</code></p>"
+            f"<p>Your 3-word code: <strong><code>{code}</code></strong></p>"
             "<p>If you did not request this, you can ignore this email.</p>"
         )
     else:
         subject = "Logg inn til Microdata Script Runner"
         html = (
             "<p>Hei,</p>"
-            "<p>Klikk lenken under for å logge inn. Lenken utløper om 15 "
-            "minutter og kan bare brukes én gang.</p>"
+            "<p>Klikk lenken under for å logge inn, eller kopier 3-ordskoden og "
+            "lim den inn på hvilken som helst maskin. Koden er gyldig i 30 dager "
+            "og kan brukes flere ganger.</p>"
             f"<p><a href=\"{url}\">Logg inn til Microdata Script Runner</a></p>"
             f"<p>Eller lim inn URL-en: <code>{url}</code></p>"
+            f"<p>Din 3-ordskode: <strong><code>{code}</code></strong></p>"
             "<p>Hvis du ikke ba om dette, kan du ignorere denne e-posten.</p>"
         )
     anvil.email.send(to=email, subject=subject, html=html)
