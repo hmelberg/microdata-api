@@ -107,20 +107,34 @@ def http_auth_email_verify():
         if not code:
             return _json({"error": "missing code"}, status=400)
 
-        email = auth.consume_magic_code(code)
-        if email is None:
+        result = auth.consume_magic_code(code)
+        if result is None:
             return _json({"error": "invalid or expired code"}, status=400)
 
-        user = auth.find_or_create_user(email, provider_kind="email_magic")
-        token, expires = auth.issue_session_token(
-            user, request_meta=auth._request_meta(anvil.server.request)
-        )
+        request_meta = auth._request_meta(anvil.server.request)
 
-        return _json({
-            "token": token,
-            "expires_at": expires.isoformat(),
-            "user": _user_payload(user),
-        })
+        if result["kind"] == "magic":
+            user = auth.find_or_create_user(result["email"], provider_kind="email_magic")
+            token, expires = auth.issue_session_token(user, request_meta=request_meta)
+            return _json({
+                "token": token,
+                "expires_at": expires.isoformat(),
+                "user": _user_payload(user),
+            })
+        elif result["kind"] == "shared":
+            # Anonymous shared session — no user, just a token
+            token, expires = auth.issue_session_token(
+                None, request_meta=request_meta, anonymous_label=result["label"]
+            )
+            return _json({
+                "token": token,
+                "expires_at": expires.isoformat(),
+                "user": None,
+                "anonymous": True,
+                "label": result["label"],
+            })
+        else:
+            return _json({"error": "unknown code kind"}, status=500)
     except Exception as exc:
         # Catch-all so the response always carries CORS headers. An uncaught
         # exception otherwise returns Anvil's default 500 (no CORS), which
@@ -145,16 +159,24 @@ def http_auth_me():
     if err:
         return err
     user = auth.principal_user(principal)
-    if user is None:
-        # Legacy X-API-Key path: no user account behind the alias
+    if user is not None:
+        return _json({
+            "principal_kind": "user",
+            "user": _user_payload(user),
+        })
+    # principal is a string at this point
+    if isinstance(principal, str) and principal.startswith("anonymous:"):
+        label = principal[len("anonymous:"):]
         return _json({
             "user": None,
-            "principal_kind": "service_token",
-            "alias": principal if isinstance(principal, str) else "",
+            "principal_kind": "anonymous",
+            "label": label,
         })
+    # Legacy X-API-Key path: no user account behind the alias
     return _json({
-        "principal_kind": "user",
-        "user": _user_payload(user),
+        "user": None,
+        "principal_kind": "service_token",
+        "alias": principal if isinstance(principal, str) else "",
     })
 
 

@@ -68,10 +68,19 @@ def _safe_get(table, **kwargs):
         return None
 
 
-def issue_session_token(user, request_meta: dict | None = None) -> tuple[str, dt.datetime]:
+def issue_session_token(
+    user,
+    request_meta: dict | None = None,
+    anonymous_label: str | None = None,
+) -> tuple[str, dt.datetime]:
+    """Issue a session token. If user is None, this is an anonymous shared-
+    code session — token has no user link, identified by anonymous_label."""
     raw = SESSION_PREFIX + secrets.token_urlsafe(32)
     expires = _utcnow() + dt.timedelta(days=SESSION_TOKEN_TTL_DAYS)
     request_meta = request_meta or {}
+    extra = {}
+    if user is None and anonymous_label:
+        extra["anonymous_label"] = anonymous_label  # auto-create column
     app_tables.auth_tokens.add_row(
         user=user,
         token_hash=_hash_token(raw),
@@ -82,6 +91,7 @@ def issue_session_token(user, request_meta: dict | None = None) -> tuple[str, dt
         user_agent=request_meta.get("user_agent", "")[:500],
         ip=request_meta.get("ip", ""),
         revoked=False,
+        **extra,
     )
     return raw, expires
 
@@ -212,14 +222,21 @@ def consume_magic_code(raw: str) -> dict | None:
 
 
 def lookup_session_token(raw: str):
-    """Return (user_row, token_row) for a valid session token, or (None, None)."""
+    """Return (user_row, token_row) for a valid session token, or (None, None).
+    For anonymous shared-code sessions: user_row is None but token_row is set."""
     row = _safe_get(app_tables.auth_tokens, token_hash=_hash_token(raw), kind="session")
     if row is None or row["revoked"]:
         return None, None
     if row["expires"] and row["expires"] < _utcnow():
         return None, None
     user = row["user"]
-    if user is None or user.get("deleted_at"):
+    # Anonymous sessions: user is None but token is still valid
+    if user is None:
+        if row.get("anonymous_label"):
+            row["last_used"] = _utcnow()
+            return None, row  # token valid, no user
+        return None, None  # neither user nor anonymous: invalid
+    if user.get("deleted_at"):
         return None, None
     row["last_used"] = _utcnow()
     return user, row
@@ -388,13 +405,22 @@ def authenticate_or_fail():
     auth_h = headers.get("Authorization") or headers.get("authorization") or ""
     if auth_h.startswith("Bearer "):
         token = auth_h[7:].strip()
-        user, _row = lookup_session_token(token)
-        if user is None:
+        user, row = lookup_session_token(token)
+        if user is None and row is None:
             return None, _json({"error": "invalid or expired token"}, status=401)
-        # Per-user rate limit reuses the existing alias-based bucket, keyed by email
-        if not utils.check_rate_limit(f"user:{user['email']}"):
-            return None, _json({"error": "rate limit exceeded"}, status=429)
-        return user, None
+        if user is not None:
+            # Normal user session
+            # Per-user rate limit reuses the existing alias-based bucket, keyed by email
+            if not utils.check_rate_limit(f"user:{user['email']}"):
+                return None, _json({"error": "rate limit exceeded"}, status=429)
+            return user, None
+        else:
+            # Anonymous shared-code session (user is None, row has anonymous_label)
+            label = row.get("anonymous_label") or ""
+            principal = f"anonymous:{label}"
+            if not utils.check_rate_limit(f"anonymous:{label}"):
+                return None, _json({"error": "rate limit exceeded"}, status=429)
+            return principal, None
 
     # 2) Legacy X-API-Key (service-token path)
     alias = utils.authenticate(req)
