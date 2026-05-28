@@ -71,9 +71,14 @@ GRAMMAR_CHEATSHEET = """\
 - Every script begins with `require <databank> as <alias>` (see Databank
   cheat sheet below), then `create-dataset <name>` (or `use <name>`), then
   one or more `import` statements bringing variables in from the databank.
-- Import syntax:
+- Import syntax (command depends on temporality — see Databank cheat sheet):
     - Cross-section:  `import db/VAR_NAME [YYYY-MM-DD] [as alias]`
-    - Event:          `import db/VAR_NAME YYYY-MM-DD to YYYY-MM-DD [as alias]`
+      (Fast / Tverrsnitt / Akkumulert)
+    - Event/forløp:   `import-event db/VAR_NAME YYYY-MM-DD to YYYY-MM-DD [as alias]`
+      (a SEPARATE command — `import ... to ...` silently drops the range and
+      imports a single value, so always use `import-event` for Forløp data)
+    - Panel:          `import-panel db/VAR1 db/VAR2 YYYY-MM-DD [YYYY-MM-DD ...]`
+      (long format, one row per (unit, time-point))
   (Replace `db` with whichever alias you set in `require ... as <alias>`.)
 - Variable transformations: `generate <name> = <expression>`,
   `replace <name> = <expr> [if <cond>]`, `recode ...`.
@@ -140,19 +145,22 @@ short alias you choose (`as <alias>`) as the prefix in subsequent imports.
 
 | Databank | `require` line | Conventional alias | Used for |
 |---|---|---|---|
-| SSB FDB | `require no.ssb.fdb:52 as db` | `db` | All SSB register data (income, demographics, education, geography). The current version is **52**. Older versions (30, 40, etc.) still exist but are stale — always use the latest unless the user explicitly asks for a specific older version. SSB releases new versions periodically (53, 54, …). |
+| SSB FDB | `require no.ssb.fdb:53 as db` | `db` | All SSB register data (income, demographics, education, geography). The current version is **53**. Older versions (30, 40, 52, etc.) still exist but are stale — always use the latest unless the user explicitly asks for a specific older version. SSB releases new versions periodically (54, 55, …). |
 | FHI NPR (hospital registry) | `require no.fhi.npr:DRAFT as fnpr` | `fnpr` | Norwegian Patient Registry — hospital admissions. |
 
 **Imports use the alias as prefix:** `import db/BEFOLKNING_KJOENN as kjonn`.
 
-**Variable temporality** (from the catalog metadata) tells you whether to
-add a date to the import:
+**Variable temporality** (from the catalog metadata) selects the import
+command. There are FOUR values (there is NO separate "Event" temporality):
 - `Fast` (Fixed) — no date. `import db/BEFOLKNING_KJOENN as kjonn`
-- `Tverrsnitt` / `Akkumulert` / `Forløp` (Time-Varying) — needs a date.
+- `Tverrsnitt` (cross-section) — one date.
   `import db/INNTEKT_WLONN 2022-01-01 as innt22`
-- `Event` — needs a date range. `import db/UTDANNING_FULLFOERT 2020-01-01 to 2023-12-31 as utd`
+- `Akkumulert` (accumulated up to a date) — one date, like Tverrsnitt.
+- `Forløp` (event/longitudinal) — a date range via `import-event`:
+  `import-event db/UTDANNING_FULLFOERT 2020-01-01 to 2023-12-31 as utd`
 
-If you import a Time-Varying variable without a date, the script will fail.
+If you import a Tverrsnitt/Akkumulert variable without a date, the script will
+fail. For multiple time-points in long/panel format, use `import-panel`.
 """
 
 
@@ -292,6 +300,28 @@ If you need to know whether a person has a parent, sibling, or spouse in
 the data, use `sysmiss()` on a **non-pseudonym** attribute (e.g. mother's
 birth year `BEFOLKNING_MOR_FOEDSELS_AAR_MND`), or build a flag in the
 parent record dataset and merge it in.
+
+**Linking relatives' attributes (parent/spouse/sibling).** A family-pointer
+like `BEFOLKNING_FAR_FNR` / `BEFOLKNING_MOR_FNR` / `BEFOLKNING_EKT_FNR` /
+`BEFOLKNING_SOESKEN_FNR` sits on the person's own row and IS the relative's
+pseudonym (= that relative's own `PERSONID_1`). To pull a parent's attribute
+onto the child: build a population dataset carrying the wanted variable, then
+merge it into the child dataset keyed on the pointer alias — the platform
+matches the relative's `PERSONID_1` to the child's pointer:
+
+```microdata
+create-dataset persondata
+import db/INNTEKT_WLONN 2019-01-01 as inntekt
+import db/BEFOLKNING_FAR_FNR as fnr_far
+import db/BEFOLKNING_MOR_FNR as fnr_mor
+
+create-dataset foreldredata
+import db/INNTEKT_WLONN 2019-01-01 as inntekt_far
+clone-variables inntekt_far -> inntekt_mor
+merge inntekt_far into persondata on fnr_far   // far's PERSONID_1 ↔ child's fnr_far
+merge inntekt_mor into persondata on fnr_mor
+use persondata
+```
 """
 
 
@@ -317,9 +347,74 @@ them.
 - Equality comparisons (`==`, `!=`) against string literals
 - `by()` / `on` keys
 
-If the user wants a numeric analysis of an alphanumeric variable, either
-recode it to numeric explicitly (`recode kjonn (1 = 0) (2 = 1)`) or
-suggest `tabulate` instead.
+**Compare codes as QUOTED strings, not numbers:**
+- ✅ `keep if kjonn == '1'`, `keep if famtype == '2.1.1'`
+- ❌ `keep if kjonn == 1`  (number vs string matches nothing)
+
+**`destring` before numeric use.** To use an alphanumeric code in numeric
+comparisons/ranges, convert first: `destring utd` then
+`replace hi_ed = 1 if utd >= 700000`. If the user wants a numeric analysis of
+an alphanumeric variable with no natural numeric meaning, either recode it
+(`recode kjonn (1 = 0) (2 = 1)`) or suggest `tabulate`.
+"""
+
+
+STATA_DIFFERENCES = """\
+## microdata.no is NOT Stata
+
+The command names (`summarize`, `generate`, `collapse`, `regress`, `keep if`)
+resemble Stata, and Stata knowledge is a useful starting point — but
+microdata.no is a distinct, restricted language. Use ONLY the commands and
+functions in the references above. Never emit a construct just because it is
+valid Stata.
+
+Common Stata habits that are INVALID here (❌ Stata → ✅ microdata):
+- ❌ `egen ... = ...` → ✅ `collapse`/`aggregate`, or `generate`
+- ❌ `bysort x: ...` / `by x: ...` → ✅ `collapse (stat) var, by(x)`
+- ❌ `foreach` / `forvalues` → ✅ `for i in <values> ... end`
+- ❌ `local`/`global` macros, `${m}`, backtick-macros → ✅ `let name = ...`;
+  the iterator `$i` exists only inside `for` loops
+- ❌ abbreviations `gen` / `reg` / `sum` / `tab` → ✅ full names
+  (`generate`, `regress`, `summarize`, `tabulate`)
+- ❌ `if x == .` (missing comparison) → ✅ `sysmiss(x)`
+- ❌ string concatenation with `+` → ✅ `++`
+- ❌ Stata merge (`merge 1:1 ... using`) → ✅ `merge <vars> into <ds> on <key>`
+- ❌ `collapse (first/last)` and multi-variable `by(k1 k2)` → not supported
+- When unsure whether a command/function exists: if it is not in the
+  references above, do not use it.
+"""
+
+
+FUNCTIONS_REFERENCE = """\
+## Functions (microdata.no DSL)
+
+Use ONLY these functions in `generate`/`replace`/`if` expressions — never invent
+function names. Test missing with `sysmiss(x)` (not `== .`); string
+concatenation is `++`.
+
+- **Math**: `acos(x)`, `asin(x)`, `atan(x)`, `cos(x)`, `sin(x)`, `tan(x)`,
+  `sqrt(x)`, `exp(x)`, `ln(x)`, `log10(x)`, `abs(x)`, `ceil(x)`, `floor(x)`,
+  `int(x)` (drop decimals), `round(x, y?)`, `pi()`, `comb(x, y)`,
+  `lnfactorial(x)` = ln(x!), `logit(x)` = ln(x/(1−x)), `quantile(x, y)`.
+- **Date**: `date(year, month, day)`, `year(d)`, `month(d)`, `day(d)`,
+  `week(d)` (1–53), `halfyear(d)` (1–2), `quarter(d)` (1–4),
+  `dow(d)` (1=Mon … 7=Sun), `doy(d)` (1–366), `isoformatdate(d)` → YYYY-MM-DD.
+- **Probability** (Stata-style cumulative/density/inverse/tail variants):
+  `normal`, `normalden`, `chi2`, `chi2tail`, `invchi2`, `t`, `ttail`, `invt`,
+  `F`, `Ftail`, `invF`, `binomial`, `binomialtail`, `betaden`, `ibeta`, …
+- **String**: `length(s)`, `string(x)` (→ alphanumeric), `lower(s)`,
+  `upper(s)`, `substr(s, pos, len)`, `trim(s)`/`ltrim(s)`/`rtrim(s)`,
+  `startswith(s, sub)`, `endswith(s, sub)`.
+- **Logic**: `inlist(x, ...)` (1 if x is among the rest),
+  `inrange(x, min, max)` (1 if min ≤ x ≤ max), `sysmiss(x)` (1 if missing).
+- **Row-wise** (across several variables): `rowmax(...)`, `rowmin(...)`,
+  `rowmean(...)`, `rowmedian(...)`, `rowtotal(...)`, `rowstd(...)`,
+  `rowmissing(...)` (# missing), `rowvalid(...)` (# non-missing),
+  `rowconcat(...)` (join as string).
+- **Labels**: `label_to_code(var, label)` (code for a label),
+  `inlabels(var, label, ...)` (filter by labels), `labelcontains(var, sub)`.
+- **Bindings/cast**: `to_int(s)`, `to_str(x)`, `to_symbol(s)`,
+  `date_fmt(year, month?, day?)` → yyyy-mm-dd, `bind(b)`.
 """
 
 
@@ -723,6 +818,7 @@ def cached_prefix() -> str:
                 None,
                 [
                     GRAMMAR_CHEATSHEET,
+                    STATA_DIFFERENCES,
                     DATABANK_CHEATSHEET,
                     DATASET_STRUCTURE,
                     build_entity_links_block(),
@@ -734,6 +830,7 @@ def cached_prefix() -> str:
                     PRIVACY_RULES,
                     build_full_catalog_block(),
                     build_commands_reference(),
+                    FUNCTIONS_REFERENCE,
                     build_canonical_examples(),
                 ],
             )
