@@ -13,6 +13,7 @@ unexpected server errors.
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import anvil.server
@@ -25,6 +26,19 @@ import utils
 import validation
 import auth
 import m2py_shim
+
+
+def _infer_k(question: str, default: int = 20) -> int:
+    """Infer how many variable results to return from the question text."""
+    q = question.lower()
+    if re.search(r'\ball\b|alle\b|complete|full list|hele listen|samtlige', q):
+        return 40
+    m = re.search(r'\b(\d+)\s*(?:variabler?|variables?|results?|treff|hits?)?\b', q)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 60:
+            return n
+    return default
 
 
 def _json(body: dict, status: int = 200) -> HttpResponse:
@@ -112,7 +126,7 @@ def http_query():
     # Sync paths — qa, variable_search.
     t0 = time.time()
     if intent == "variable_search":
-        hits = retrieval.server_variable_search(query=question, lang=resolved_lang, k=15)
+        hits = retrieval.server_variable_search(query=question, lang=resolved_lang, k=_infer_k(question))
         result = {"variables": hits}
     else:  # qa or unknown
         result = generation.answer_question(question=question, lang=resolved_lang)
@@ -367,9 +381,9 @@ def http_variables_search(**kwargs):
     q = (kwargs.get("q") or "").strip()
     lang = kwargs.get("lang") or "no"
     try:
-        k = int(kwargs.get("k", 15))
+        k = int(kwargs.get("k", _infer_k(q)))
     except (TypeError, ValueError):
-        k = 15
+        k = _infer_k(q)
     if not q:
         return _json({"error": "missing 'q'"}, status=400)
     results = retrieval.server_variable_search(query=q, lang=lang, k=k)
