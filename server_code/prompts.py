@@ -161,6 +161,8 @@ command. There are FOUR values (there is NO separate "Event" temporality):
 
 If you import a Tverrsnitt/Akkumulert variable without a date, the script will
 fail. For multiple time-points in long/panel format, use `import-panel`.
+**Always check the catalog tag for every variable you import** — `Tverrsnitt`
+and `Akkumulert` always require a date; `Fast` must not have one.
 """
 
 
@@ -180,6 +182,15 @@ a flag that only 3 rows satisfy.
 would leave a smaller population, the platform refuses. Plan your
 filters so the resulting `n` clearly clears 1000.
 
+**T2 — `collapse` and winsorization.** `collapse` with a non-pseudonym
+`by()` key (kommune, fylke, naering, …) uses winsorized (1%/99%) values.
+`collapse` with a pseudonym key (`by(_FNR)`, `by(pid)`, …) uses raw values.
+`regress`, `logit`, `probit`, `anova` always use raw values — coefficients
+are unbiased. Don't say the displayed mean is the population mean; it's
+the winsorized mean.
+
+**T4 — `scatter` does not exist.** Use `histogram` or other plot commands.
+
 **T5 — Sparse tables hidden.** `tabulate` suppresses its output if more
 than 50% of cells have a frequency < 5. To avoid this, use coarser
 categories (e.g. age bands instead of single years) or grow the
@@ -197,39 +208,14 @@ on a dataset with 4 such rows will fail.
 
 **T7 — `summarize` requires ≥ 10 obs.** `summarize`, `correlate`, `ci`,
 `anova`, and `normaltest` are blocked on populations smaller than 10.
-`tabulate` (frequencies) is exempt. If a question only makes sense on a
-small group, suggest broadening the group or using a frequency table
-instead.
+`tabulate` (frequencies) is exempt. T1 ensures ≥ 1000 total, but
+sub-groups after filtering can still fall below 10.
 
-**T8 — Medians and percentiles rounded to 3 significant digits.** In
-`summarize` output, the 1%/25%/50%/75%/99% columns are rounded
-(47238 → 47200, 2.7183 → 2.72). Mean and SD are NOT rounded. Don't
-write scripts that depend on percentile precision below 3 sig figs.
-
-**T2 — 1%/99% winsorization on displayed numeric statistics.** Before
-displaying mean and SD in `summarize`, and before plotting in
-`histogram`, `scatter`, `boxplot`, each numeric variable is clipped:
-values below the 1st percentile become the 1st percentile value, and
-values above the 99th percentile become the 99th percentile value.
-Consequences:
-- `mean` and `sd` are biased toward the center (slightly lower for
-  right-skewed variables like income).
-- `min` and `max` shown in grouped summarize equal the 1%/99% bounds,
-  not the true extremes.
-- `median` and quartiles (25%/75%) are unaffected by winsorization.
-- `regress`, `logit`, `probit`, `anova` use the RAW (un-winsorized)
-  values. Coefficients are unbiased.
-- `collapse` with a non-pseudonym `by()` key (kommune, fylke, …) also
-  uses winsorized values; `collapse by(_FNR)` (pseudonym) uses raw.
-Don't tell users that the displayed mean is the population mean — it's
-the winsorized mean. For the true population mean, use `regress y ` (no
-covariates) which reports `_cons`.
-
-**Pseudonyms:** see the Pseudonym rules section — `_FNR` variables are
-keys only.
-
-**For continuous variables**, prefer `summarize` (returns mean/sd/
-quantiles, not individual values).
+**T9 — Regression constant hidden when k-anonymity < 5.** If combinations
+of categorical explanatory variables produce fewer than 5 rows with the
+same value combination, the constant term is hidden. Continuous variables
+are excluded from the k-anonymity check. Fixes: coarser categories, fewer
+categorical dummies, or a larger population.
 
 **Per-script override (m2py simulator only):** users may disable
 disclosure control for a single script with a magic comment:
@@ -264,6 +250,9 @@ DATE_QUIRKS = """\
   1970-01-01.
 - Catalog metadata `data_type` tells you the format: `date:yyyymm`,
   `date:yyyymmdd`, or `int` (with description noting the convention).
+- **Validity period.** The catalog description specifies the variable's
+  validity period. Always choose an import date within that period —
+  a date outside it causes a runtime error.
 """
 
 
@@ -356,6 +345,13 @@ comparisons/ranges, convert first: `destring utd` then
 `replace hi_ed = 1 if utd >= 700000`. If the user wants a numeric analysis of
 an alphanumeric variable with no natural numeric meaning, either recode it
 (`recode kjonn (1 = 0) (2 = 1)`) or suggest `tabulate`.
+
+**Prefer numeric codes over label strings.** Use `destring` + numeric
+comparison as the default. `inlabels()` is only appropriate when the
+labels are explicitly shown in the catalog (≤12 categories) and the
+code is unknown. Never guess label text. Always add a comment with the
+label so the intent is clear:
+`keep if kjonn == 1  // 1 = Mann`
 """
 
 
@@ -560,6 +556,11 @@ tabulate kjonn HOVEDTILSTAND1   // events grouped by sex
 Choose A when the analysis unit is the person (e.g. regression of
 income on number of admissions). Choose B when the analysis unit is
 the event (e.g. tabulate admissions by sex).
+
+**Variable scope.** After `use <dataset>`, only the variables in that
+active dataset are accessible. Variables from other datasets must be
+merged in BEFORE they can be used — referencing them directly is a
+runtime error.
 """
 
 
