@@ -264,8 +264,8 @@ class MicroParser:
             if not m_paren:
                 return {"raw": remainder}
             before = remainder[:m_paren.start()].split()
-            _method_tokens = {'2sls', 'liml', 'gmm'}
-            method = '2sls'
+            _method_tokens = {'2sls', 'tsls', 'liml', 'gmm'}
+            method = 'tsls'
             dep_var = None
             exog = []
             for i, tok in enumerate(before):
@@ -4505,6 +4505,89 @@ class RegressionHandler:
         summary = str(model.summary(alpha=alpha)) if hasattr(model, 'summary') else str(model)
         return (summary, extra)
 
+    def _expand_factor_design(self, raw_indep, df):
+        """Stata-stil faktor-/interaksjonssyntaks for regresjon.
+
+        Tolker hvert ledd i variabellista:
+          VAR    → kontinuerlig (lineært ledd)
+          c.VAR  → tving kontinuerlig
+          i.VAR  → dummyer (referansekategori droppes, drop_first)
+          A#B    → interaksjon (kun produktleddet)
+          A##B   → full kryssing (hovedeffekter + interaksjon)
+        Innenfor # er bare navn KATEGORISKE (som Stata); c.-prefiks tvinger
+        kontinuerlig. Kryssing av faktorer gir produkt av alle ikke-referanse-
+        dummyer. Bare navn UTENFOR # er kontinuerlig (bakoverkompatibelt — bruk
+        i. for dummyer).
+
+        Returnerer (indep_vars, computed, cont_bases):
+          indep_vars – ordnet liste over sluttkolonner i designmatrisen
+          computed   – {kolonnenavn: Series} for genererte kolonner (dummyer,
+                       c.-ledd, interaksjoner), indeksert som df
+          cont_bases – basis-kontinuerlige kolonner som hentes direkte fra df
+        """
+        import itertools
+
+        indep_vars = []
+        computed = {}
+        cont_bases = []
+
+        def _dummies(base):
+            if base not in df.columns:
+                raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
+            d = pd.get_dummies(df[base], prefix=base, drop_first=True)
+            return [(c, d[c].astype(float)) for c in d.columns]
+
+        def _numeric(base):
+            if base not in df.columns:
+                raise ValueError(f"Variabel '{base}' finnes ikke i datasettet")
+            return pd.to_numeric(df[base], errors='coerce')
+
+        def _operand_cols(tok):
+            # Kolonner for ett interaksjons-ledd: liste av (navn, Series).
+            if tok.startswith('c.'):
+                base = tok[2:]
+                return [(base, _numeric(base))]
+            base = tok[2:] if tok.startswith('i.') else tok
+            return _dummies(base)  # bare navn i # = kategorisk (Stata-default)
+
+        def _add_main(name, series):
+            if series is None:
+                if name not in cont_bases:
+                    cont_bases.append(name)
+            else:
+                computed[name] = series
+            if name not in indep_vars:
+                indep_vars.append(name)
+
+        for tok in raw_indep:
+            if '#' in tok:
+                full_cross = '##' in tok
+                operands = tok.replace('##', '#').split('#')
+                expanded = [_operand_cols(op) for op in operands]
+                if full_cross:
+                    for cols in expanded:
+                        for name, series in cols:
+                            _add_main(name, series)
+                for combo in itertools.product(*expanded):
+                    inter_name = '#'.join(c[0] for c in combo)
+                    series = None
+                    for _, cs in combo:
+                        series = cs if series is None else series * cs
+                    computed[inter_name] = series
+                    if inter_name not in indep_vars:
+                        indep_vars.append(inter_name)
+            elif tok.startswith('c.'):
+                _add_main(tok[2:], None)        # kontinuerlig passthrough
+            elif tok.startswith('i.'):
+                for name, series in _dummies(tok[2:]):
+                    computed[name] = series
+                    if name not in indep_vars:
+                        indep_vars.append(name)
+            else:
+                _add_main(tok, None)            # bare utenfor # = kontinuerlig
+
+        return indep_vars, computed, cont_bases
+
     def _fit_simple(self, reg_cmd, df, args, options):
         """Fit en enkel regresjon og returner (model, dep_var, indep_vars, df_clean).
         Brukes av coefplot og evt. andre metoder som trenger råmodellen.
@@ -4514,45 +4597,23 @@ class RegressionHandler:
         raw_indep = list(args[1:])
         add_const = 'noconstant' not in options
 
-        # i. prefix → dummies
-        factor_map = {}
-        for v in raw_indep:
-            if v.startswith('i.'):
-                base = v[2:]
-                if base not in df.columns:
-                    raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
-                dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-                factor_map[v] = list(dummies.columns)
-
-        indep_vars = []
-        for v in raw_indep:
-            if v in factor_map:
-                indep_vars.extend(factor_map[v])
-            else:
-                indep_vars.append(v)
-
-        cont_vars = [dep_var] + [v for v in indep_vars if v not in
-                                  [c for cols in factor_map.values() for c in cols]]
+        # Faktor-/interaksjonssyntaks (i. c. # ##) → designkolonner
+        indep_vars, _computed, _cont_bases = self._expand_factor_design(raw_indep, df)
+        cont_vars = [dep_var] + [b for b in _cont_bases if b != dep_var]
         missing = [v for v in cont_vars if v not in df.columns]
         if missing:
             raise ValueError(f"Variabler ikke funnet: {missing}")
-        df_work = df[cont_vars].copy()
+        df_work = df[list(dict.fromkeys(cont_vars))].copy()
         for v in cont_vars:
             df_work[v] = pd.to_numeric(df_work[v], errors='coerce')
-        for iv, dummy_cols in factor_map.items():
-            base = iv[2:]
-            dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-            for col in dummy_cols:
-                df_work[col] = dummies[col].astype(float)
+        for name, series in _computed.items():
+            df_work[name] = pd.to_numeric(series.reindex(df_work.index), errors='coerce')
 
         df_clean = df_work.dropna().copy()
         if df_clean.empty:
             raise ValueError("Ingen observasjoner etter konvertering.")
-        for v in cont_vars:
-            df_clean[v] = df_clean[v].astype(np.float64)
-        for cols in factor_map.values():
-            for col in cols:
-                df_clean[col] = df_clean[col].astype(np.float64)
+        for col in [dep_var] + indep_vars:
+            df_clean[col] = df_clean[col].astype(np.float64)
 
         if options.get('standardize'):
             for v in indep_vars:
@@ -4590,57 +4651,33 @@ class RegressionHandler:
         add_const = 'noconstant' not in options
         alpha = 1 - (float(options.get('level', 95)) / 100)
 
-        # ── Stata-stil i.VARNAME: lag dummies for kategoriske variabler ──────
-        # i.kjønn → dummy-kolonner kjønn_<kategori2>, kjønn_<kategori3>, …
-        # Referansekategori (lavest sortert) droppes automatisk (drop_first=True).
-        factor_map = {}  # 'i.xxx' -> [dummy_col1, dummy_col2, ...]
-        for v in raw_indep:
-            if v.startswith('i.'):
-                base = v[2:]
-                if base not in df.columns:
-                    raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
-                dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-                factor_map[v] = list(dummies.columns)
+        # ── Stata-stil faktor-/interaksjonssyntaks (i. c. # ##) ──────────────
+        # i.kjønn → dummyer; c.alder → kontinuerlig; a#b → interaksjon;
+        # a##b → full kryssing. Referansekategori droppes (drop_first=True).
+        indep_vars, _computed_cols, _cont_bases = self._expand_factor_design(raw_indep, df)
 
-        # Utvidet indep_vars: i.xxx erstattes med sine dummy-kolonnenavn
-        indep_vars = []
-        for v in raw_indep:
-            if v in factor_map:
-                indep_vars.extend(factor_map[v])
-            else:
-                indep_vars.append(v)
-
-        # Kontinuerlige variabler som må konverteres numerisk
-        cont_vars = [dep_var] + [v for v in indep_vars if v not in
-                                  [col for cols in factor_map.values() for col in cols]]
+        # Kontinuerlige basisvariabler (+ evt. cluster) som hentes fra df
+        cont_vars = [dep_var] + [b for b in _cont_bases if b != dep_var]
         if options.get('cluster') and options['cluster'] not in cont_vars:
             cont_vars.append(options['cluster'])
 
-        # Bygg arbeidsdf: numeriske kontinuerlige kolonner
         missing = [v for v in cont_vars if v not in df.columns]
         if missing:
             raise ValueError(f"Variabler ikke funnet i datasettet: {missing}")
-        df_work = df[cont_vars].copy()
+        df_work = df[list(dict.fromkeys(cont_vars))].copy()
         for v in cont_vars:
             df_work[v] = pd.to_numeric(df_work[v], errors='coerce')
-
-        # Legg til dummy-kolonner (allerede float/bool fra get_dummies)
-        for iv, dummy_cols in factor_map.items():
-            base = iv[2:]
-            dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-            for col in dummy_cols:
-                df_work[col] = dummies[col].astype(float)
+        # Genererte kolonner (dummyer, c.-ledd, interaksjoner)
+        for name, series in _computed_cols.items():
+            df_work[name] = pd.to_numeric(series.reindex(df_work.index), errors='coerce')
 
         df_clean = df_work.dropna().copy()
         if df_clean.empty:
             raise ValueError(
                 "Ingen observasjoner etter numerisk konvertering — sjekk at avhengig og uavhengige variabler er tall."
             )
-        for v in cont_vars:
-            df_clean[v] = df_clean[v].astype(np.float64)
-        for cols in factor_map.values():
-            for col in cols:
-                df_clean[col] = df_clean[col].astype(np.float64)
+        for col in [dep_var] + indep_vars:
+            df_clean[col] = df_clean[col].astype(np.float64)
 
         vars_needed = [dep_var] + indep_vars  # brukes av regress-panel m.fl.
         Y = df_clean[dep_var]
@@ -4673,6 +4710,45 @@ class RegressionHandler:
                 coef = np.exp(model.params)
                 conf = np.exp(model.conf_int(alpha=alpha))
                 out = f"\nModell: poisson (incidence rate ratios)\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
+                return (out, None)
+            return (str(model.summary(alpha=alpha)), None)
+
+        if cmd in ('negative-binomial', 'negative-binomial-predict'):
+            # MLE-estimering av dispersjon (alpha); passer telledata med
+            # overdispersjon (varians > forventning), jf. poisson ellers.
+            from statsmodels.discrete.discrete_model import NegativeBinomial as _NB
+            Y_nb, X_nb, _idx = Y, X, df_clean.index
+            _fit_kw = {}
+            _expo = options.get('exposure')
+            if _expo:
+                if _expo not in df.columns:
+                    raise ValueError(f"exposure-variabel '{_expo}' finnes ikke i datasettet")
+                _ev = pd.to_numeric(df.loc[_idx, _expo], errors='coerce')
+                _keep = _ev.notna() & (_ev > 0)
+                if not bool(_keep.all()):
+                    Y_nb, X_nb, _ev, _idx = Y_nb[_keep], X_nb[_keep], _ev[_keep], _idx[_keep]
+                _fit_kw['exposure'] = _ev.astype(float).values
+            model = _NB(Y_nb, X_nb, **_fit_kw).fit(disp=0)
+            model = self._apply_cov(model, options, df_clean.loc[_idx])
+
+            if cmd == 'negative-binomial-predict':
+                extra = {}
+                pred_name = options.get('predicted', 'predicted')
+                res_name = options.get('residuals')
+                fitted = pd.Series(np.asarray(model.predict()), index=_idx)
+                if pred_name:
+                    extra[str(pred_name) if pred_name is not True else 'predicted'] = fitted
+                if res_name:
+                    extra[str(res_name) if res_name is not True else 'residuals'] = pd.Series(
+                        Y_nb.values - fitted.values, index=_idx)
+                if not extra:
+                    extra['predicted'] = fitted
+                return (str(model.summary(alpha=alpha)), extra)
+
+            if options.get('irr'):
+                coef = np.exp(model.params)
+                conf = np.exp(model.conf_int(alpha=alpha))
+                out = f"\nModell: negative-binomial (incidence rate ratios)\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
                 return (out, None)
             return (str(model.summary(alpha=alpha)), None)
 
@@ -4985,7 +5061,14 @@ class RegressionHandler:
         predicted_vals = X_actual @ model_2s.params
         resid_vals = Y - predicted_vals
 
-        method = args.get('method', '2sls').upper()
+        # Estimator: docs-form etterstilt opsjon (, tsls/liml/gmm) har forrang,
+        # ellers posisjonelt token i var-lista, ellers tsls (standard).
+        method = args.get('method') or 'tsls'
+        for _m in ('tsls', 'liml', 'gmm', '2sls'):
+            if options.get(_m):
+                method = _m
+                break
+        method = method.upper()
         header = f"\nInstrumentvariabelregresjon ({method})\n"
         header += "\n".join(first_stage_lines) + "\n\n"
         header += f"Andre trinn (avhengig: {dep}):\n"
@@ -6102,6 +6185,7 @@ class MicroInterpreter:
         # Kommandoer som er rene analyser (krever ikke-pseudonym variabler)
         _ANALYSIS_CMDS = {'summarize', 'correlate', 'ci', 'anova', 'normaltest',
                           'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                          'negative-binomial', 'negative-binomial-predict',
                           'regress-panel', 'ivregress'}
 
         def _maybe_check_pseudonym(varname):
@@ -6992,7 +7076,7 @@ class MicroInterpreter:
             lines.append(f'{comment} ' + ' '.join(str(v) for v in vars_list))
             lines.append(f"# statsmodels anova_lm(ols(...))")
             return lines
-        if cmd in ['regress', 'logit', 'probit', 'poisson', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'regress-panel-predict', 'regress-panel-diff', 'rdd']:
+        if cmd in ['regress', 'logit', 'probit', 'poisson', 'negative-binomial', 'negative-binomial-predict', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'regress-panel-predict', 'regress-panel-diff', 'rdd']:
             vars_list = args if isinstance(args, (list, tuple)) else (args.get('vars', []) if isinstance(args, dict) else [])
             lines.append(f'{comment} ' + ' '.join(str(v) for v in vars_list) + (' ' + str(opts) if opts else ''))
             lines.append(f"# statsmodels OLS/Logit/Probit/Poisson eller regress-predict pred/residuals")
@@ -7059,6 +7143,7 @@ class MicroInterpreter:
             _strict_check_cmds = (
                 'collapse', 'aggregate', 'summarize', 'correlate', 'ci', 'anova',
                 'normaltest', 'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                'negative-binomial', 'negative-binomial-predict',
                 'regress-panel', 'ivregress', 'generate', 'replace', 'keep', 'drop'
             )
             if cmd in _strict_check_cmds:
@@ -7865,7 +7950,7 @@ class MicroInterpreter:
                 return
 
             # 6. Regresjon
-            if cmd in ['regress', 'logit', 'probit', 'poisson', 'regress-panel', 'regress-panel-predict', 'regress-panel-diff', 'hausman', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'rdd']:
+            if cmd in ['regress', 'logit', 'probit', 'poisson', 'negative-binomial', 'negative-binomial-predict', 'regress-panel', 'regress-panel-predict', 'regress-panel-diff', 'hausman', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'rdd']:
                 result = self.reg_engine.execute(cmd, df_target, args, opts)
                 summary, extra = result if isinstance(result, tuple) else (result, None)
                 self._log(f"\n--- Modell: {cmd} ---\n{summary}\n")

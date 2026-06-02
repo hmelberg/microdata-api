@@ -233,6 +233,40 @@ results — e.g. for teaching or debugging.
 """
 
 
+INFERENCE_RULES = """\
+## Inference and causal analysis
+
+When the question is about an effect, cause, impact, or relationship: act as an expert in quasi-experimental methods for observational data. Choose the simplest method the identification strategy allows, and state the key assumption it rests on.
+
+**Factor and interaction syntax** (regress, regress-panel, logit, probit, poisson, negative-binomial, mlogit):
+- `i.var` — categorical → dummies (reference category dropped). `c.var` — treat categorical as continuous.
+- `a#b` — interaction; `a##b` — full crossing (main effects + interaction). `c.x#c.y` for two metric variables.
+- `if` expressions are supported: `regress y x if inntekt > 500000`.
+- Common options (after a comma): `robust`, `cluster(v)`, `level(90)`, `noconstant`, `control(...)`.
+
+**OLS:** `regress depvar varlist` — also `ov`/`vif`/`het_bp` (diagnostics), `standardize`, `margins()`. Prediction: `regress-predict ..., predicted(p) residuals(r) cooksd(c)`.
+
+**Fixed effects / panel** (requires a panel dataset — `import-panel`/`import-event`/`reshape-to-panel`):
+- `regress-panel depvar varlist` — `fe` (default), `re`, `be`, `pooled`. `hausman depvar varlist` chooses FE vs RE (P<0.05 ⇒ FE). FE assumes strict exogeneity and removes all time-invariant confounding per unit.
+
+**Diff-in-diff:** `regress-panel-diff depvar group treated [varlist]` — `group`=1 treatment group/0 control, `treated`=1 from the treatment time onward/0 before. ATET is the interaction coefficient. Assumes **parallel trends**. (Equivalent: `regress-panel depvar group##treated ..., pooled`.)
+
+**Instrumental variables:** `ivregress depvar exog (endog = instruments) exog` — e.g. `ivregress innt05 mann gift (formuehoy = alder)`. Options: `tsls` (default), `liml`, `gmm`, `firststage`, `endog`, `overid`. Check the first-stage F (weak instrument if < ~10). Assumes the instrument is **relevant and exogenous**.
+
+**Regression discontinuity:** `rdd depvar runvar [varlist]` with `cutoff(0)`, `polynomial(1)`, `fuzzy(treat_dummy)`. Assumes units cannot precisely manipulate themselves across the threshold.
+
+**Binary outcome:** `logit`/`probit depvar varlist` — `or` (odds ratio, logit), `mfx(dydx)`, `margins(dummy)`. **Count data:** `poisson` (mean≈variance) or `negative-binomial` (overdispersion); `irr` (rate ratio), `exposure(v)`. **Nominal >2 categories:** `mlogit`. All have `...-predict` (`probabilities()`/`predicted()`/`residuals()`).
+
+**Wage-gap decomposition:** `oaxaca depvar varlist by groupvar` (Blinder-Oaxaca). **Multilevel:** `regress-mml depvar varlist by level2 [level1]` (up to 3 levels).
+
+**Survival / duration:** `cox event duration [varlist]` (+ `hazard`), `kaplan-meier`, `weibull`.
+
+**Visualization:** `coefplot` after regress/logit/probit/poisson.
+
+Privacy (T9): the regression constant is hidden if categorical-variable combinations yield < 5 units — keep categories coarse.
+"""
+
+
 DATE_QUIRKS = """\
 ## Date format quirks
 
@@ -829,6 +863,7 @@ def cached_prefix() -> str:
                     TYPE_RULES,
                     DATE_QUIRKS,
                     PRIVACY_RULES,
+                    INFERENCE_RULES,
                     build_full_catalog_block(),
                     build_commands_reference(),
                     FUNCTIONS_REFERENCE,
