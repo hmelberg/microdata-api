@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import datetime as dt
+import hmac
 import uuid
 from typing import Optional
 
 import anvil.secrets
 import anvil.server
+import anvil.tables.query as q
 from anvil.tables import app_tables
 
 RATE_LIMIT_WINDOW_SEC = 60
 RATE_LIMIT_MAX_CALLS = 30  # per key per minute
+
+# eval_runs logging: cap stored free-text and keep a bounded retention window.
+# This is a data-minimization tool — we should not hoard full questions/scripts.
+EVAL_RUNS_MAX_CHARS = 4000
+EVAL_RUNS_RETENTION_DAYS = 90
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +62,9 @@ def authenticate(request) -> Optional[str]:
         return None
 
     for alias, value in _all_api_keys().items():
-        if value and value == header_key:
+        # Constant-time comparison so a timing side-channel can't be used to
+        # recover a configured key byte by byte.
+        if value and hmac.compare_digest(str(value), str(header_key)):
             return alias
     return None
 
@@ -64,32 +73,52 @@ def authenticate(request) -> Optional[str]:
 # Rate limit (simple token bucket per key per minute)
 
 
-def check_rate_limit(alias: str) -> bool:
-    """Return True if the call is allowed, False if it is over the limit.
+def _window_start(now: dt.datetime, window_sec: int) -> dt.datetime:
+    """Floor `now` to the start of its fixed window. Pure (no I/O) so it can be
+    unit-tested. window_sec should divide evenly into a day (60/300/600/3600…),
+    which keeps windows aligned and avoids the naive-utc .timestamp() pitfall
+    (which would interpret the value as local time)."""
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    secs = (now - midnight).total_seconds()
+    floored = int(secs - (secs % window_sec))
+    return midnight + dt.timedelta(seconds=floored)
+
+
+def check_rate_limit(
+    alias: str,
+    max_calls: int = RATE_LIMIT_MAX_CALLS,
+    window_sec: int = RATE_LIMIT_WINDOW_SEC,
+) -> bool:
+    """Return True if the call is allowed, False if it is over the limit for the
+    given `alias` within the current window.
 
     Defensive: a freshly-created `api_usage` table has no columns until the
     first add_row(); a get() against missing columns raises. We treat any
-    failure as "no row yet" and try add_row, then default to True so that
-    rate-limit accounting never 500s a real request.
+    failure as "no row yet" and then default to True so rate-limit accounting
+    never 500s a real request — but we LOG the failure (it was silent before)
+    so a broken table doesn't quietly disable rate limiting.
     """
-    window_start = dt.datetime.utcnow().replace(second=0, microsecond=0)
+    window_start = _window_start(dt.datetime.utcnow(), window_sec)
     try:
         row = app_tables.api_usage.get(key_alias=alias, window_start=window_start)
-    except Exception:
+    except Exception as exc:
+        # column-less table on first run is normal; other errors are not.
+        print(f"[rate_limit] api_usage.get failed for {alias!r}: {exc!r}")
         row = None
     if row is None:
         try:
             app_tables.api_usage.add_row(
                 key_alias=alias, window_start=window_start, count=1
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[rate_limit] api_usage.add_row failed for {alias!r}: {exc!r}")
         return True
     try:
         count = (row["count"] or 0) + 1
         row["count"] = count
-        return count <= RATE_LIMIT_MAX_CALLS
-    except Exception:
+        return count <= max_calls
+    except Exception as exc:
+        print(f"[rate_limit] increment failed for {alias!r} (failing open): {exc!r}")
         return True
 
 
@@ -119,10 +148,12 @@ def log_request(
             ts=dt.datetime.utcnow(),
             request_id=request_id,
             endpoint=endpoint,
-            question=question,
+            # Cap stored free-text; we don't need the whole question/script to
+            # debug usage, and this is a data-minimization service.
+            question=(question or "")[:EVAL_RUNS_MAX_CHARS],
             lang=lang,
             model=model,
-            script=script,
+            script=(script or "")[:EVAL_RUNS_MAX_CHARS],
             variables_used=variables_used or [],
             commands_used=commands_used or [],
             validation_passed=validation_passed,
@@ -137,3 +168,24 @@ def log_request(
         # log row couldn't be written.
         pass
     return request_id
+
+
+# ---------------------------------------------------------------------------
+# eval_runs retention
+
+
+def purge_old_eval_runs(retention_days: int = EVAL_RUNS_RETENTION_DAYS) -> int:
+    """Delete eval_runs rows older than `retention_days`. Returns the number
+    deleted. Wire this to an Anvil Scheduled Task (e.g. daily) in the IDE —
+    Anvil schedules are configured there, not in code. Intentionally NOT
+    @anvil.server.callable: a destructive purge should not be client-reachable.
+    """
+    cutoff = dt.datetime.utcnow() - dt.timedelta(days=retention_days)
+    deleted = 0
+    try:
+        for row in app_tables.eval_runs.search(ts=q.less_than(cutoff)):
+            row.delete()
+            deleted += 1
+    except Exception as exc:
+        print(f"[purge_old_eval_runs] failed after {deleted} rows: {exc!r}")
+    return deleted
