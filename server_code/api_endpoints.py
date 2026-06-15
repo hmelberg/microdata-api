@@ -467,14 +467,19 @@ def http_run():
     Body: {
         "script":   "<microdata-script>",
         "max_rows": int (valgfri, default = MockDataEngine sin default),
-        "echo":     bool (valgfri, default true — inkluder kommando-echo i output)
+        "echo":     bool (valgfri, default true — inkluder kommando-echo i output),
+        "format":   "json" | "text" | "html" (valgfri, default "json")
     }
-    Returnerer: {
-        "output":    str,            # join(output_log)
-        "datasets":  [{"name", "n_rows", "columns"}],
-        "error":     str | null,     # exception-melding hvis kjøringen brøt
-        "latency_ms": int
+    format="json" (default): {
+        "output":      str,          # rå join(output_log) m/ embed-markører
+        "output_text": str,          # ren tekst (tabeller->tekst, figurer->ASCII)
+        "output_html": str,          # selvstendig HTML-dokument
+        "datasets":    [{"name", "n_rows", "columns"}],
+        "error":       str | null,   # exception-melding hvis kjøringen brøt
+        "latency_ms":  int
     }
+    format="text": text/plain (output_text).
+    format="html": text/html  (output_html — et komplett HTML-dokument).
 
     Merk: dette kjører mot syntetisk data fra MockDataEngine — ingen ekte
     microdata-data er tilgjengelig på serveren. Anvils 30s HTTP-cap gjelder;
@@ -489,6 +494,7 @@ def http_run():
         return _json({"error": "missing 'script'"}, status=400)
     max_rows = body.get("max_rows")
     echo = bool(body.get("echo", True))
+    fmt = (body.get("format") or "json").lower()
 
     t0 = time.time()
     try:
@@ -499,7 +505,9 @@ def http_run():
         )
     except Exception as exc:
         # Infrastruktur-feil (kunne ikke laste interpreter osv.)
-        result = {"output": "", "datasets": [], "error": f"{type(exc).__name__}: {exc}"}
+        msg = f"{type(exc).__name__}: {exc}"
+        result = {"output": "", "output_text": f"FEIL: {msg}",
+                  "output_html": f"<pre>FEIL: {msg}</pre>", "datasets": [], "error": msg}
     latency_ms = int((time.time() - t0) * 1000)
     utils.log_request(
         endpoint="/run",
@@ -514,4 +522,10 @@ def http_run():
         api_key_alias=auth.principal_alias(alias),
     )
     result["latency_ms"] = latency_ms
+    if fmt == "html":
+        return HttpResponse(status=200, body=result.get("output_html") or "",
+                            headers={"Content-Type": "text/html; charset=utf-8"})
+    if fmt == "text":
+        return HttpResponse(status=200, body=result.get("output_text") or "",
+                            headers={"Content-Type": "text/plain; charset=utf-8"})
     return _json(result)
