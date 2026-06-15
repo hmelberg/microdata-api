@@ -9,3 +9,6 @@ output_render_prototype.py
 # Local scratch test (not tracked)
 scratch_test_output_render.py
 scratch_run.html
+
+# Local /run test page (not tracked)
+run_tester.html
