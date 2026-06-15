@@ -71,9 +71,14 @@ GRAMMAR_CHEATSHEET = """\
 - Every script begins with `require <databank> as <alias>` (see Databank
   cheat sheet below), then `create-dataset <name>` (or `use <name>`), then
   one or more `import` statements bringing variables in from the databank.
-- Import syntax:
+- Import syntax (command depends on temporality — see Databank cheat sheet):
     - Cross-section:  `import db/VAR_NAME [YYYY-MM-DD] [as alias]`
-    - Event:          `import db/VAR_NAME YYYY-MM-DD to YYYY-MM-DD [as alias]`
+      (Fast / Tverrsnitt / Akkumulert)
+    - Event/forløp:   `import-event db/VAR_NAME YYYY-MM-DD to YYYY-MM-DD [as alias]`
+      (a SEPARATE command — `import ... to ...` silently drops the range and
+      imports a single value, so always use `import-event` for Forløp data)
+    - Panel:          `import-panel db/VAR1 db/VAR2 YYYY-MM-DD [YYYY-MM-DD ...]`
+      (long format, one row per (unit, time-point))
   (Replace `db` with whichever alias you set in `require ... as <alias>`.)
 - Variable transformations: `generate <name> = <expression>`,
   `replace <name> = <expr> [if <cond>]`, `recode ...`.
@@ -140,19 +145,24 @@ short alias you choose (`as <alias>`) as the prefix in subsequent imports.
 
 | Databank | `require` line | Conventional alias | Used for |
 |---|---|---|---|
-| SSB FDB | `require no.ssb.fdb:52 as db` | `db` | All SSB register data (income, demographics, education, geography). The current version is **52**. Older versions (30, 40, etc.) still exist but are stale — always use the latest unless the user explicitly asks for a specific older version. SSB releases new versions periodically (53, 54, …). |
+| SSB FDB | `require no.ssb.fdb:53 as db` | `db` | All SSB register data (income, demographics, education, geography). The current version is **53**. Older versions (30, 40, 52, etc.) still exist but are stale — always use the latest unless the user explicitly asks for a specific older version. SSB releases new versions periodically (54, 55, …). |
 | FHI NPR (hospital registry) | `require no.fhi.npr:DRAFT as fnpr` | `fnpr` | Norwegian Patient Registry — hospital admissions. |
 
 **Imports use the alias as prefix:** `import db/BEFOLKNING_KJOENN as kjonn`.
 
-**Variable temporality** (from the catalog metadata) tells you whether to
-add a date to the import:
+**Variable temporality** (from the catalog metadata) selects the import
+command. There are FOUR values (there is NO separate "Event" temporality):
 - `Fast` (Fixed) — no date. `import db/BEFOLKNING_KJOENN as kjonn`
-- `Tverrsnitt` / `Akkumulert` / `Forløp` (Time-Varying) — needs a date.
+- `Tverrsnitt` (cross-section) — one date.
   `import db/INNTEKT_WLONN 2022-01-01 as innt22`
-- `Event` — needs a date range. `import db/UTDANNING_FULLFOERT 2020-01-01 to 2023-12-31 as utd`
+- `Akkumulert` (accumulated up to a date) — one date, like Tverrsnitt.
+- `Forløp` (event/longitudinal) — a date range via `import-event`:
+  `import-event db/UTDANNING_FULLFOERT 2020-01-01 to 2023-12-31 as utd`
 
-If you import a Time-Varying variable without a date, the script will fail.
+If you import a Tverrsnitt/Akkumulert variable without a date, the script will
+fail. For multiple time-points in long/panel format, use `import-panel`.
+**Always check the catalog tag for every variable you import** — `Tverrsnitt`
+and `Akkumulert` always require a date; `Fast` must not have one.
 """
 
 
@@ -172,6 +182,15 @@ a flag that only 3 rows satisfy.
 would leave a smaller population, the platform refuses. Plan your
 filters so the resulting `n` clearly clears 1000.
 
+**T2 — `collapse` and winsorization.** `collapse` with a non-pseudonym
+`by()` key (kommune, fylke, naering, …) uses winsorized (1%/99%) values.
+`collapse` with a pseudonym key (`by(_FNR)`, `by(pid)`, …) uses raw values.
+`regress`, `logit`, `probit`, `anova` always use raw values — coefficients
+are unbiased. Don't say the displayed mean is the population mean; it's
+the winsorized mean.
+
+**T4 — `scatter` does not exist.** Use `histogram` or other plot commands.
+
 **T5 — Sparse tables hidden.** `tabulate` suppresses its output if more
 than 50% of cells have a frequency < 5. To avoid this, use coarser
 categories (e.g. age bands instead of single years) or grow the
@@ -189,39 +208,14 @@ on a dataset with 4 such rows will fail.
 
 **T7 — `summarize` requires ≥ 10 obs.** `summarize`, `correlate`, `ci`,
 `anova`, and `normaltest` are blocked on populations smaller than 10.
-`tabulate` (frequencies) is exempt. If a question only makes sense on a
-small group, suggest broadening the group or using a frequency table
-instead.
+`tabulate` (frequencies) is exempt. T1 ensures ≥ 1000 total, but
+sub-groups after filtering can still fall below 10.
 
-**T8 — Medians and percentiles rounded to 3 significant digits.** In
-`summarize` output, the 1%/25%/50%/75%/99% columns are rounded
-(47238 → 47200, 2.7183 → 2.72). Mean and SD are NOT rounded. Don't
-write scripts that depend on percentile precision below 3 sig figs.
-
-**T2 — 1%/99% winsorization on displayed numeric statistics.** Before
-displaying mean and SD in `summarize`, and before plotting in
-`histogram`, `scatter`, `boxplot`, each numeric variable is clipped:
-values below the 1st percentile become the 1st percentile value, and
-values above the 99th percentile become the 99th percentile value.
-Consequences:
-- `mean` and `sd` are biased toward the center (slightly lower for
-  right-skewed variables like income).
-- `min` and `max` shown in grouped summarize equal the 1%/99% bounds,
-  not the true extremes.
-- `median` and quartiles (25%/75%) are unaffected by winsorization.
-- `regress`, `logit`, `probit`, `anova` use the RAW (un-winsorized)
-  values. Coefficients are unbiased.
-- `collapse` with a non-pseudonym `by()` key (kommune, fylke, …) also
-  uses winsorized values; `collapse by(_FNR)` (pseudonym) uses raw.
-Don't tell users that the displayed mean is the population mean — it's
-the winsorized mean. For the true population mean, use `regress y ` (no
-covariates) which reports `_cons`.
-
-**Pseudonyms:** see the Pseudonym rules section — `_FNR` variables are
-keys only.
-
-**For continuous variables**, prefer `summarize` (returns mean/sd/
-quantiles, not individual values).
+**T9 — Regression constant hidden when k-anonymity < 5.** If combinations
+of categorical explanatory variables produce fewer than 5 rows with the
+same value combination, the constant term is hidden. Continuous variables
+are excluded from the k-anonymity check. Fixes: coarser categories, fewer
+categorical dummies, or a larger population.
 
 **Per-script override (m2py simulator only):** users may disable
 disclosure control for a single script with a magic comment:
@@ -236,6 +230,40 @@ reacts to it. Default is ON. Values: `on`/`off`, `true`/`false`,
 `1`/`0`, `yes`/`no`. Short form `dc` also works. Only emit this
 directive when the user explicitly asks to see raw (uncensored)
 results — e.g. for teaching or debugging.
+"""
+
+
+INFERENCE_RULES = """\
+## Inference and causal analysis
+
+When the question is about an effect, cause, impact, or relationship: act as an expert in quasi-experimental methods for observational data. Choose the simplest method the identification strategy allows, and state the key assumption it rests on.
+
+**Factor and interaction syntax** (regress, regress-panel, logit, probit, poisson, negative-binomial, mlogit):
+- `i.var` — categorical → dummies (reference category dropped). `c.var` — treat categorical as continuous.
+- `a#b` — interaction; `a##b` — full crossing (main effects + interaction). `c.x#c.y` for two metric variables.
+- `if` expressions are supported: `regress y x if inntekt > 500000`.
+- Common options (after a comma): `robust`, `cluster(v)`, `level(90)`, `noconstant`, `control(...)`.
+
+**OLS:** `regress depvar varlist` — also `ov`/`vif`/`het_bp` (diagnostics), `standardize`, `margins()`. Prediction: `regress-predict ..., predicted(p) residuals(r) cooksd(c)`.
+
+**Fixed effects / panel** (requires a panel dataset — `import-panel`/`import-event`/`reshape-to-panel`):
+- `regress-panel depvar varlist` — `fe` (default), `re`, `be`, `pooled`. `hausman depvar varlist` chooses FE vs RE (P<0.05 ⇒ FE). FE assumes strict exogeneity and removes all time-invariant confounding per unit.
+
+**Diff-in-diff:** `regress-panel-diff depvar group treated [varlist]` — `group`=1 treatment group/0 control, `treated`=1 from the treatment time onward/0 before. ATET is the interaction coefficient. Assumes **parallel trends**. (Equivalent: `regress-panel depvar group##treated ..., pooled`.)
+
+**Instrumental variables:** `ivregress depvar exog (endog = instruments) exog` — e.g. `ivregress innt05 mann gift (formuehoy = alder)`. Options: `tsls` (default), `liml`, `gmm`, `firststage`, `endog`, `overid`. Check the first-stage F (weak instrument if < ~10). Assumes the instrument is **relevant and exogenous**.
+
+**Regression discontinuity:** `rdd depvar runvar [varlist]` with `cutoff(0)`, `polynomial(1)`, `fuzzy(treat_dummy)`. Assumes units cannot precisely manipulate themselves across the threshold.
+
+**Binary outcome:** `logit`/`probit depvar varlist` — `or` (odds ratio, logit), `mfx(dydx)`, `margins(dummy)`. **Count data:** `poisson` (mean≈variance) or `negative-binomial` (overdispersion); `irr` (rate ratio), `exposure(v)`. **Nominal >2 categories:** `mlogit`. All have `...-predict` (`probabilities()`/`predicted()`/`residuals()`).
+
+**Wage-gap decomposition:** `oaxaca depvar varlist by groupvar` (Blinder-Oaxaca). **Multilevel:** `regress-mml depvar varlist by level2 [level1]` (up to 3 levels).
+
+**Survival / duration:** `cox event duration [varlist]` (+ `hazard`), `kaplan-meier`, `weibull`.
+
+**Visualization:** `coefplot` after regress/logit/probit/poisson.
+
+Privacy (T9): the regression constant is hidden if categorical-variable combinations yield < 5 units — keep categories coarse.
 """
 
 
@@ -256,6 +284,9 @@ DATE_QUIRKS = """\
   1970-01-01.
 - Catalog metadata `data_type` tells you the format: `date:yyyymm`,
   `date:yyyymmdd`, or `int` (with description noting the convention).
+- **Validity period.** The catalog description specifies the variable's
+  validity period. Always choose an import date within that period —
+  a date outside it causes a runtime error.
 """
 
 
@@ -292,6 +323,28 @@ If you need to know whether a person has a parent, sibling, or spouse in
 the data, use `sysmiss()` on a **non-pseudonym** attribute (e.g. mother's
 birth year `BEFOLKNING_MOR_FOEDSELS_AAR_MND`), or build a flag in the
 parent record dataset and merge it in.
+
+**Linking relatives' attributes (parent/spouse/sibling).** A family-pointer
+like `BEFOLKNING_FAR_FNR` / `BEFOLKNING_MOR_FNR` / `BEFOLKNING_EKT_FNR` /
+`BEFOLKNING_SOESKEN_FNR` sits on the person's own row and IS the relative's
+pseudonym (= that relative's own `PERSONID_1`). To pull a parent's attribute
+onto the child: build a population dataset carrying the wanted variable, then
+merge it into the child dataset keyed on the pointer alias — the platform
+matches the relative's `PERSONID_1` to the child's pointer:
+
+```microdata
+create-dataset persondata
+import db/INNTEKT_WLONN 2019-01-01 as inntekt
+import db/BEFOLKNING_FAR_FNR as fnr_far
+import db/BEFOLKNING_MOR_FNR as fnr_mor
+
+create-dataset foreldredata
+import db/INNTEKT_WLONN 2019-01-01 as inntekt_far
+clone-variables inntekt_far -> inntekt_mor
+merge inntekt_far into persondata on fnr_far   // far's PERSONID_1 ↔ child's fnr_far
+merge inntekt_mor into persondata on fnr_mor
+use persondata
+```
 """
 
 
@@ -317,9 +370,81 @@ them.
 - Equality comparisons (`==`, `!=`) against string literals
 - `by()` / `on` keys
 
-If the user wants a numeric analysis of an alphanumeric variable, either
-recode it to numeric explicitly (`recode kjonn (1 = 0) (2 = 1)`) or
-suggest `tabulate` instead.
+**Compare codes as QUOTED strings, not numbers:**
+- ✅ `keep if kjonn == '1'`, `keep if famtype == '2.1.1'`
+- ❌ `keep if kjonn == 1`  (number vs string matches nothing)
+
+**`destring` before numeric use.** To use an alphanumeric code in numeric
+comparisons/ranges, convert first: `destring utd` then
+`replace hi_ed = 1 if utd >= 700000`. If the user wants a numeric analysis of
+an alphanumeric variable with no natural numeric meaning, either recode it
+(`recode kjonn (1 = 0) (2 = 1)`) or suggest `tabulate`.
+
+**Prefer numeric codes over label strings.** Use `destring` + numeric
+comparison as the default. `inlabels()` is only appropriate when the
+labels are explicitly shown in the catalog (≤12 categories) and the
+code is unknown. Never guess label text. Always add a comment with the
+label so the intent is clear:
+`keep if kjonn == 1  // 1 = Mann`
+"""
+
+
+STATA_DIFFERENCES = """\
+## microdata.no is NOT Stata
+
+The command names (`summarize`, `generate`, `collapse`, `regress`, `keep if`)
+resemble Stata, and Stata knowledge is a useful starting point — but
+microdata.no is a distinct, restricted language. Use ONLY the commands and
+functions in the references above. Never emit a construct just because it is
+valid Stata.
+
+Common Stata habits that are INVALID here (❌ Stata → ✅ microdata):
+- ❌ `egen ... = ...` → ✅ `collapse`/`aggregate`, or `generate`
+- ❌ `bysort x: ...` / `by x: ...` → ✅ `collapse (stat) var, by(x)`
+- ❌ `foreach` / `forvalues` → ✅ `for i in <values> ... end`
+- ❌ `local`/`global` macros, `${m}`, backtick-macros → ✅ `let name = ...`;
+  the iterator `$i` exists only inside `for` loops
+- ❌ abbreviations `gen` / `reg` / `sum` / `tab` → ✅ full names
+  (`generate`, `regress`, `summarize`, `tabulate`)
+- ❌ `if x == .` (missing comparison) → ✅ `sysmiss(x)`
+- ❌ string concatenation with `+` → ✅ `++`
+- ❌ Stata merge (`merge 1:1 ... using`) → ✅ `merge <vars> into <ds> on <key>`
+- ❌ `collapse (first/last)` and multi-variable `by(k1 k2)` → not supported
+- When unsure whether a command/function exists: if it is not in the
+  references above, do not use it.
+"""
+
+
+FUNCTIONS_REFERENCE = """\
+## Functions (microdata.no DSL)
+
+Use ONLY these functions in `generate`/`replace`/`if` expressions — never invent
+function names. Test missing with `sysmiss(x)` (not `== .`); string
+concatenation is `++`.
+
+- **Math**: `acos(x)`, `asin(x)`, `atan(x)`, `cos(x)`, `sin(x)`, `tan(x)`,
+  `sqrt(x)`, `exp(x)`, `ln(x)`, `log10(x)`, `abs(x)`, `ceil(x)`, `floor(x)`,
+  `int(x)` (drop decimals), `round(x, y?)`, `pi()`, `comb(x, y)`,
+  `lnfactorial(x)` = ln(x!), `logit(x)` = ln(x/(1−x)), `quantile(x, y)`.
+- **Date**: `date(year, month, day)`, `year(d)`, `month(d)`, `day(d)`,
+  `week(d)` (1–53), `halfyear(d)` (1–2), `quarter(d)` (1–4),
+  `dow(d)` (1=Mon … 7=Sun), `doy(d)` (1–366), `isoformatdate(d)` → YYYY-MM-DD.
+- **Probability** (Stata-style cumulative/density/inverse/tail variants):
+  `normal`, `normalden`, `chi2`, `chi2tail`, `invchi2`, `t`, `ttail`, `invt`,
+  `F`, `Ftail`, `invF`, `binomial`, `binomialtail`, `betaden`, `ibeta`, …
+- **String**: `length(s)`, `string(x)` (→ alphanumeric), `lower(s)`,
+  `upper(s)`, `substr(s, pos, len)`, `trim(s)`/`ltrim(s)`/`rtrim(s)`,
+  `startswith(s, sub)`, `endswith(s, sub)`.
+- **Logic**: `inlist(x, ...)` (1 if x is among the rest),
+  `inrange(x, min, max)` (1 if min ≤ x ≤ max), `sysmiss(x)` (1 if missing).
+- **Row-wise** (across several variables): `rowmax(...)`, `rowmin(...)`,
+  `rowmean(...)`, `rowmedian(...)`, `rowtotal(...)`, `rowstd(...)`,
+  `rowmissing(...)` (# missing), `rowvalid(...)` (# non-missing),
+  `rowconcat(...)` (join as string).
+- **Labels**: `label_to_code(var, label)` (code for a label),
+  `inlabels(var, label, ...)` (filter by labels), `labelcontains(var, sub)`.
+- **Bindings/cast**: `to_int(s)`, `to_str(x)`, `to_symbol(s)`,
+  `date_fmt(year, month?, day?)` → yyyy-mm-dd, `bind(b)`.
 """
 
 
@@ -465,6 +590,11 @@ tabulate kjonn HOVEDTILSTAND1   // events grouped by sex
 Choose A when the analysis unit is the person (e.g. regression of
 income on number of admissions). Choose B when the analysis unit is
 the event (e.g. tabulate admissions by sex).
+
+**Variable scope.** After `use <dataset>`, only the variables in that
+active dataset are accessible. Variables from other datasets must be
+merged in BEFORE they can be used — referencing them directly is a
+runtime error.
 """
 
 
@@ -723,6 +853,7 @@ def cached_prefix() -> str:
                 None,
                 [
                     GRAMMAR_CHEATSHEET,
+                    STATA_DIFFERENCES,
                     DATABANK_CHEATSHEET,
                     DATASET_STRUCTURE,
                     build_entity_links_block(),
@@ -732,8 +863,10 @@ def cached_prefix() -> str:
                     TYPE_RULES,
                     DATE_QUIRKS,
                     PRIVACY_RULES,
+                    INFERENCE_RULES,
                     build_full_catalog_block(),
                     build_commands_reference(),
+                    FUNCTIONS_REFERENCE,
                     build_canonical_examples(),
                 ],
             )

@@ -200,7 +200,7 @@ def _bm25_top_k(idx: _Index, query_tokens: list[str], k: int) -> list[tuple[floa
     return out
 
 
-def search_variables(query: str, lang: str = "no", k: int = 15) -> list[dict]:
+def search_variables(query: str, lang: str = "no", k: int = 20) -> list[dict]:
     _ensure_loaded()
     tokens = tokenize(" ".join(expand_synonyms(query)))
     candidates = _bm25_top_k(_variables_index, tokens, k=k * 2)
@@ -289,7 +289,7 @@ def lookup_variable(query: str, lang: str = "no", k: int = 8) -> list[dict]:
 
 
 @anvil.server.callable
-def server_variable_search(query: str, lang: str = "no", k: int = 15) -> list[dict]:
+def server_variable_search(query: str, lang: str = "no", k: int = 20) -> list[dict]:
     hits = search_variables(query=query, lang=lang, k=k)
     return [
         {
