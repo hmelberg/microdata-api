@@ -1,3 +1,9 @@
+# ============================================================================
+# GENERATED COPY — DO NOT EDIT HERE.
+# Source of truth: the m2py repo (m2py.py / functions.py). This file is produced
+# by sync_to_api.sh. Edit the engine in the m2py repo and re-run that script;
+# direct edits here are overwritten on the next sync.
+# ============================================================================
 import re
 import math
 
@@ -5,10 +11,11 @@ import math
 # Avsløringskontroll (microdata.no-stil sensurering)
 # Når PÅ: matcher microdata.no — pseudonym-validering, type-sjekk, blokker små
 # populasjoner og tabeller, winsoriserer, runder persentiler.
-# Default: PÅ. Også PÅ når flagget mangler (API/script-bruk).
+# Default: AV. Slås på via hamburgermenyen (bryter) eller script-direktivet
+# `// m2py: disclosure-control=on` (alias `dc=on`). Også AV når flagget mangler.
 # ─────────────────────────────────────────────────────────────────────────────
 def _is_disclosure_control():
-    v = globals().get('M2PY_DISCLOSURE_CONTROL', '1')
+    v = globals().get('M2PY_DISCLOSURE_CONTROL', '0')
     return v in (True, 1, '1', 'true', 'True', 'yes', 'on')
 
 # Bakoverkompatibilitet: tidligere het pseudonym-/type-/for-løkke-sjekkene
@@ -22,6 +29,84 @@ _DC_MIN_SUMMARIZE = 10           # T7: min populasjon for summarize
 _DC_TABULATE_LOW_CELL = 5        # T5: celle-frekvenser <5 telles som "lave"
 _DC_TABULATE_LOW_RATIO = 0.5     # T5: >50% lave celler stopper tabellen
 _DC_PERCENTILE_SIG_DIGITS = 3    # T8: signifikante sifre for median/persentiler
+
+# ─── Sentrale brukerstillinger ─────────────────────────────────────────────
+# Globale defaults samles her. Lookup går ALLTID via _get_default(key) som
+# har innbakt hardkodet fallback — så ting virker også hvis dicten er slettet
+# eller mangler en nøkkel. Direktiv-systemet (// m2py: key=value) muterer
+# entries her midlertidig og restaurerer etter script-kjøring.
+M2PY_DEFAULTS = {
+    'label_format': 'both',      # 'both' | 'label' | 'code' — tabulate-output
+    # Avsløringsterskler (konfigurerbare under Innstillinger). Standardene
+    # matcher microdata.no; de skaleres IKKE automatisk til mock-populasjonen.
+    'dc_min_population': _DC_MIN_POPULATION,      # T1
+    'dc_tabulate_low_cell': _DC_TABULATE_LOW_CELL,  # T5 (celle-frekvens)
+    'dc_min_affected': _DC_MIN_AFFECTED,          # T6
+    'dc_min_summarize': _DC_MIN_SUMMARIZE,        # T7
+    # Framtidige defaults legges til her.
+}
+
+_M2PY_HARDCODED_FALLBACKS = {
+    'label_format': 'both',
+    'dc_min_population': _DC_MIN_POPULATION,
+    'dc_tabulate_low_cell': _DC_TABULATE_LOW_CELL,
+    'dc_min_affected': _DC_MIN_AFFECTED,
+    'dc_min_summarize': _DC_MIN_SUMMARIZE,
+}
+
+def _get_default(key):
+    """Hent default-verdi. Robust mot at M2PY_DEFAULTS er slettet eller mangler key."""
+    d = globals().get('M2PY_DEFAULTS')
+    if isinstance(d, dict) and key in d:
+        return d[key]
+    return _M2PY_HARDCODED_FALLBACKS.get(key)
+
+
+def _dc_threshold(key):
+    """Hent en konfigurerbar avsløringsterskel som heltall, robust mot
+    ugyldige verdier (faller tilbake til den hardkodede standarden)."""
+    try:
+        return int(_get_default(key))
+    except (TypeError, ValueError):
+        return _M2PY_HARDCODED_FALLBACKS.get(key)
+
+
+# Datakilde for import: 'dynamic' (generer) eller 'static' (last fra statiske filer).
+# Settes via // m2py: data-source=… eller fra appen (innstillinger).
+M2PY_DATA_SOURCE = 'dynamic'
+
+_GYLDIGHET_RE = re.compile(
+    r'Gyldighetsperiode:\s*(\d{4}-\d{2}-\d{2})\s*[–—-]\s*(\d{4}-\d{2}-\d{2})'
+)
+
+
+def _valid_import_dates_for(meta):
+    """Sett av gyldige importdatoer (det årlige rutenettet) for en variabel, basert
+    på Gyldighetsperiode i beskrivelsen. None hvis ikke et datovariabel-rutenett
+    (Fast/Forløp eller ukjent vindu) — da gjøres ingen dato-validering."""
+    if not isinstance(meta, dict):
+        return None
+    temporalitet = str(meta.get('temporalitet', '')).lower()
+    if temporalitet not in ('akkumulert', 'tverrsnitt'):
+        return None
+    m = _GYLDIGHET_RE.search(str(meta.get('description', '')))
+    if not m:
+        return None
+    vf, vt = m.group(1), m.group(2)
+    fy, fm, fd = vf.split('-')
+    ty_s, tm, td = vt.split('-')
+    fy_i, ty_i = int(fy), int(ty_s)
+    dates = {f'{y:04d}-{fm}-{fd}' for y in range(fy_i, ty_i + 1)}
+    # Akkumulert = verdi akkumulert T.O.M. datoen, så plattformen godtar også
+    # periodeslutt-datoen hvert år (helårsinntekt på ÅR-12-31, ikke bare ÅR-01-01)
+    # — og ÅR-01-01 gir samme verdi som forrige års slutt. Tverrsnitt er derimot
+    # ett øyeblikksbilde på ÉN måned-dag (startens), så der utvider vi ikke.
+    if temporalitet == 'akkumulert' and (tm, td) != (fm, fd):
+        dates |= {f'{y:04d}-{tm}-{td}' for y in range(fy_i, ty_i + 1)}
+    # Klem til gyldighetsvinduet: siste års start-måned-dag kan falle ETTER vt
+    # (og en Akkumulert periodeslutt i første år FØR vf). En utgått variabel
+    # skal ikke tilby slike datoer.
+    return {d for d in dates if vf <= d <= vt}
 
 # Variabelnavn-mønstre som identifiserer pseudonymer i microdata.no.
 # Bruker disse som backup når metadata mangler eksplisitt is_pseudonym.
@@ -111,6 +196,52 @@ def _smart_float_fmt(x, base_dec):
         dec = base_dec
     return f'{x:.{dec}f}'
 
+
+# ── scrub-kommandoer (dataminimering via protect) ──────────────────────────────
+def _scrub_split_commas(s):
+    """Del på komma kun på topp-nivå (ikke inne i (), [] eller {})."""
+    out, buf, depth = [], [], 0
+    for ch in s:
+        if ch in '([{':
+            depth += 1; buf.append(ch)
+        elif ch in ')]}':
+            depth = max(0, depth - 1); buf.append(ch)
+        elif ch == ',' and depth == 0:
+            out.append(''.join(buf)); buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        out.append(''.join(buf))
+    return out
+
+
+def _scrub_parse_value(v):
+    """Type-inferens for kwarg-verdier: tuple/liste, streng, bool, None, tall, bareword."""
+    v = v.strip()
+    if not v:
+        return v
+    if (v[0], v[-1]) in (('(', ')'), ('[', ']')):
+        inner = v[1:-1]
+        parts = [p for p in _scrub_split_commas(inner) if p.strip() != '']
+        return tuple(_scrub_parse_value(p) for p in parts)
+    if (v[0], v[-1]) in (('"', '"'), ("'", "'")):
+        return v[1:-1]
+    low = v.lower()
+    if low in ('true', 'false'):
+        return low == 'true'
+    if low in ('none', 'null'):
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        pass
+    return v  # bareword (f.eks. auto, random, pid)
+
+
 class MicroParser:
     def __init__(self):
         # Regex for 'aggregate' mønster: (stat) var -> ny_var
@@ -159,9 +290,12 @@ class MicroParser:
             var_name = loop_match.group(1)
             items = loop_match.group(2).strip().split()
             body = loop_match.group(3).strip()
+            # Erstatt kun frittstående forekomster av iteratoren (ordgrense),
+            # ellers mangles ord som `import` → `1mport` for iterator `i`.
+            _iter_re = re.compile(r'(?<!\w)' + re.escape(var_name) + r'(?!\w)')
             expanded = ""
             for item in items:
-                expanded += body.replace(var_name, item) + "\n"
+                expanded += _iter_re.sub(item, body) + "\n"
             script_text = script_text[:loop_match.start()] + expanded + script_text[loop_match.end():]
 
         # 2) Linjefortsettelse ala microdata: backslash på slutten av linjen
@@ -205,6 +339,22 @@ class MicroParser:
         if not line:
             return None
 
+        # 0. Scrub-kommandoer: scrub-VERB(var[, var2 …][, key=value …]). Parser
+        #    parentes-innholdet selv, så generisk komma/if-splitting hoppes over
+        #    (komma inne i parentesen er argument-skille, ikke opsjons-skille).
+        _m_scrub = re.match(r'^(scrub-[a-z_]+)\s*\((.*)\)\s*$', line, re.IGNORECASE)
+        if _m_scrub:
+            return {
+                "command": _m_scrub.group(1).lower(),
+                "args": self._parse_scrub_args(_m_scrub.group(2)),
+                "condition": None,
+                "options": {},
+            }
+        if re.fullmatch(r'scrub-auto', line, re.IGNORECASE):
+            return {"command": "scrub-auto",
+                    "args": {"columns": [], "kwargs": {}},
+                    "condition": None, "options": {}}
+
         # 1. Skill ut opsjoner (alt etter første komma), men IKKE for kommandoer der komma
         #    kan forekomme i argumenter/etiketter (generate, recode, define-labels, …).
         #    NB: Naiv split(',') knekker f.eks. recode … (1/3 = 1 "Jordbruk, skogbruk, fiske")
@@ -214,6 +364,8 @@ class MicroParser:
             'generate', 'recode', 'define-labels', 'keep', 'drop', 'replace',
             # `for x in v1, v2, ...` har komma i iterator-listen, ikke opsjoner.
             'for',
+            # import … scrub-winsorize(limits=(0.01,0.99)) — komma i scrub-kwargs.
+            'import', 'import-event',
         })
         options_dict = {}
         first_word = line.split(maxsplit=1)[0].lower() if line else ''
@@ -241,6 +393,10 @@ class MicroParser:
             remainder = _m_inline.group(2) + (' ' + remainder if remainder else '')
 
         args = self._parse_command_logic(command, remainder)
+        # Import-opsjoner (outer_join/inner_join/values/...) parses i import-grenen
+        # og flyttes hit til den felles options-dicten som eksekveringen leser.
+        if isinstance(args, dict) and args.get('_import_options'):
+            options_dict.update(args.pop('_import_options'))
 
         return {
             "command": command,
@@ -248,6 +404,20 @@ class MicroParser:
             "condition": condition.strip() if condition else None,
             "options": options_dict
         }
+
+    def _parse_scrub_args(self, inside):
+        """Parse innholdet i scrub-VERB(...): posisjonelle variabler + key=value-kwargs."""
+        columns, kwargs = [], {}
+        for tok in _scrub_split_commas(inside):
+            tok = tok.strip()
+            if not tok:
+                continue
+            m = re.match(r'^([A-Za-z_]\w*)\s*=\s*(.*)$', tok, re.DOTALL)
+            if m:
+                kwargs[m.group(1)] = _scrub_parse_value(m.group(2))
+            else:
+                columns.append(tok.strip().strip('"\''))
+        return {"columns": columns, "kwargs": kwargs}
 
     def _parse_command_logic(self, cmd, remainder):
         if cmd == 'aggregate':
@@ -264,8 +434,8 @@ class MicroParser:
             if not m_paren:
                 return {"raw": remainder}
             before = remainder[:m_paren.start()].split()
-            _method_tokens = {'2sls', 'liml', 'gmm'}
-            method = '2sls'
+            _method_tokens = {'2sls', 'tsls', 'liml', 'gmm'}
+            method = 'tsls'
             dep_var = None
             exog = []
             for i, tok in enumerate(before):
@@ -312,6 +482,39 @@ class MicroParser:
             return toks if toks else []
 
         if cmd in ['import', 'import-event']:
+            # Import-opsjoner etter komma på topp-nivå (utenfor parenteser):
+            # `, outer_join`, `, inner_join`, `, values(1, 2)`, `, values_from(ds)`.
+            # (import er holdt utenfor den globale komma-splittingen pga. scrub-kwargs,
+            # så vi parser opsjonene her.) Skilles ut FØR scrub/import-mønster.
+            import_options = {}
+            _depth = 0
+            _cut = -1
+            for _i, _ch in enumerate(remainder):
+                if _ch == '(':
+                    _depth += 1
+                elif _ch == ')':
+                    _depth = max(0, _depth - 1)
+                elif _ch == ',' and _depth == 0:
+                    _cut = _i
+                    break
+            if _cut >= 0:
+                _opt_part = remainder[_cut + 1:]
+                # Ikke forveksle med scrub-suffikset (har eget format uten ledende komma).
+                if 'scrub-' not in _opt_part.lower():
+                    remainder = remainder[:_cut].rstrip()
+                    for _mo in re.finditer(r"(?P<opt>\w+)(?:\((?P<arg>[^)]*)\))?", _opt_part):
+                        if _mo.group('opt'):
+                            import_options[_mo.group('opt').lower()] = (
+                                _mo.group('arg').strip() if _mo.group('arg') is not None else True
+                            )
+            # Valgfritt scrub-suffiks: `… as alias scrub-VERB[(kwargs)]` (dataminimering
+            # ved import). Trekk det ut FØR import_pattern, så alias-deteksjonen er ren.
+            scrub_spec = None
+            m_scrub = re.search(r'\s+(scrub-[a-z_]+)(?:\((.*)\))?\s*$', remainder, re.IGNORECASE)
+            if m_scrub:
+                scrub_spec = {"verb": m_scrub.group(1).lower()[len('scrub-'):],
+                              "args_raw": m_scrub.group(2) or ""}
+                remainder = remainder[:m_scrub.start()].rstrip()
             match = self.import_pattern.search(remainder)
             if not match:
                 return {"raw": remainder}
@@ -324,6 +527,10 @@ class MicroParser:
                 alias = result.get('alias') or ''
                 if after and after != alias:
                     result['_alias_raw'] = after
+            if scrub_spec:
+                result['scrub'] = scrub_spec
+            if import_options:
+                result['_import_options'] = import_options
             return result
         if cmd == 'import-panel':
             # import-panel var1 var2 ... time1 time2 ...
@@ -375,14 +582,24 @@ class MicroParser:
             return {"vars": remainder.split()}
 
         if cmd == 'recode':
-            # var1 var2 (1 2 3 = 0) (4 = 1)  -- skill vars fra rules
+            # var1 var2 (1 2 3 = 0) (4 = 1) [, prefix('ny_')]
+            # NB: recode comma-splittes ikke i parse_line (komma kan stå i
+            # etiketter), så prefix()/generate() trekkes ut her.
+            prefix = None
+            m_opt = re.search(
+                r",\s*(?:prefix|generate)\(\s*['\"]?([^'\")]*?)['\"]?\s*\)\s*$",
+                remainder,
+            )
+            if m_opt:
+                prefix = m_opt.group(1)
+                remainder = remainder[:m_opt.start()].strip()
             rule_pos = remainder.find('(')
             if rule_pos >= 0:
                 vars_part = remainder[:rule_pos].strip().split()
                 rules_part = remainder[rule_pos:]
                 rules = re.findall(r'\(([^)]+)\)', rules_part)
-                return {"vars": vars_part, "rules": rules}
-            return {"vars": remainder.split(), "rules": []}
+                return {"vars": vars_part, "rules": rules, "prefix": prefix}
+            return {"vars": remainder.split(), "rules": [], "prefix": prefix}
 
         if cmd == 'define-labels':
             return self._parse_define_labels(remainder)
@@ -598,121 +815,11 @@ class MicroParser:
         return {"name": name, "pairs": pairs}
 
 
-class LabelManager:
-    """Håndterer define-labels, assign-labels, drop-labels, list-labels."""
-
-    def __init__(self, catalog=None):
-        self.codelists = {}  # codelist_name -> {value: label}
-        self.var_to_codelist = {}  # var_name -> codelist_name
-        self._load_from_catalog(catalog or {})
-
-    def _load_from_catalog(self, catalog):
-        """Pre-last kodelister fra variable_metadata (labels eller codelist per variabel)."""
-        for var_path, meta in catalog.items():
-            if isinstance(meta, dict) and 'labels' in meta:
-                # Bruk kortnavn som codelist-navn
-                short = var_path.split('/')[-1] + '_labels'
-                self.codelists[short] = {self._conv(k): v for k, v in meta['labels'].items()}
-            if isinstance(meta, dict) and 'codelist' in meta and meta['codelist'] not in self.codelists:
-                # Referanse til codelist – må først være definert
-                pass
-
-    def _conv(self, v):
-        try:
-            return int(v) if str(v).lstrip('-').isdigit() else float(v)
-        except (ValueError, TypeError):
-            return v
-
-    def define_labels(self, name, pairs):
-        """define-labels codelist-name value label [value label ...]"""
-        self.codelists[name] = {self._conv(v): label for v, label in pairs}
-
-    def assign_labels(self, var_name, codelist_name):
-        """assign-labels var-name codelist-name"""
-        if codelist_name not in self.codelists:
-            raise ValueError(f"Kodeliste '{codelist_name}' finnes ikke. Bruk define-labels først.")
-        self.var_to_codelist[var_name] = codelist_name
-
-    def drop_labels(self, names):
-        """drop-labels codelist-name [codelist-name ...]"""
-        for n in names:
-            self.codelists.pop(n, None)
-            self.var_to_codelist = {v: c for v, c in self.var_to_codelist.items() if c != n}
-
-    def get_codelist_for_var(self, var_name, time=None):
-        """Returnerer codelist-dict for variabel, eller None."""
-        return self.codelists.get(self.var_to_codelist.get(var_name))
-
-    def format_value(self, var_name, value):
-        """Returnerer label for verdi hvis codelist finnes, ellers råverdi."""
-        cl = self.get_codelist_for_var(var_name)
-        if cl is None:
-            return value
-        # Prøv både eksakt type og konvertert (1 vs 1.0)
-        if value in cl:
-            return cl[value]
-        if pd.isna(value):
-            return value
-        try:
-            v2 = int(value) if isinstance(value, float) and value == int(value) else value
-            return cl.get(v2, value)
-        except (ValueError, TypeError):
-            return cl.get(value, value)
-
-    def list_labels_output(self, codelist_or_var, time=None, catalog=None):
-        """Formater kodeliste for list-labels. codelist_or_var er navn eller variabel."""
-        if codelist_or_var in self.codelists:
-            cl = self.codelists[codelist_or_var]
-        else:
-            cname = self.var_to_codelist.get(codelist_or_var)
-            if cname:
-                cl = self.codelists.get(cname)
-            else:
-                # Prøv register-var i katalog
-                short = codelist_or_var.split('/')[-1] if '/' in codelist_or_var else codelist_or_var
-                meta = (catalog or {}).get(codelist_or_var) or next(
-                    (v for k, v in (catalog or {}).items() if k.endswith('/' + short)), {}
-                )
-                if isinstance(meta, dict) and meta.get('labels'):
-                    cl = {self._conv(k): v for k, v in meta['labels'].items()}
-                else:
-                    return f"Kodeliste eller variabel '{codelist_or_var}' ikke funnet."
-        if not cl:
-            return f"Kodeliste '{codelist_or_var}' er tom."
-        lines = [f"\n--- Kodeliste: {codelist_or_var} ---"]
-        for val, label in sorted(cl.items(), key=lambda x: (str(x[0]), x[1])):
-            lines.append(f"  {val}  {label}")
-        return "\n".join(lines)
-
-    def apply_to_tabulate_result(self, result, var1, var2=None):
-        """Mapp rad/kolonneindeks gjennom codelist for tabulate-output."""
-        if result is None:
-            return result
-        lm = self
-        if hasattr(result, 'index'):
-            cl1 = lm.get_codelist_for_var(var1)
-            if cl1:
-                new_idx = result.index.map(lambda x: lm.format_value(var1, x) if not (isinstance(x, tuple) and len(x) > 1) else x)
-                if not (isinstance(result.index[0], tuple) if len(result.index) else False):
-                    result = result.copy()
-                    result.index = new_idx
-                else:
-                    # Flere variabler i rad – mapp første
-                    def map_row(r):
-                        if isinstance(r, tuple):
-                            return (lm.format_value(var1, r[0]),) + r[1:]
-                        return lm.format_value(var1, r)
-                    result.index = result.index.map(map_row)
-        if var2 and hasattr(result, 'columns') and hasattr(result.columns, 'map'):
-            cl2 = lm.get_codelist_for_var(var2)
-            if cl2:
-                result.columns = result.columns.map(lambda x: lm.format_value(var2, x))
-        return result
-
 
 import pandas as pd
 import numpy as np
 import hashlib
+from functools import lru_cache
 def _eval_int(x):
     """Element-wise int for generate expressions when functions.py is not available."""
     if hasattr(x, 'astype'):
@@ -850,6 +957,40 @@ def _stata_like_bool_fixup(expr):
     return s
 
 
+def _split_quote_segments(expr):
+    """Del et uttrykk i segmenter (is_quoted, tekst) der is_quoted angir om
+    teksten ligger inni et streng-litteral. Brukes for å gjøre omskrivinger
+    anførselstegn-bevisste. Håndterer både ' og " samt \\-escaping."""
+    segs = []
+    i = 0
+    n = len(expr)
+    q = None
+    start = 0
+    while i < n:
+        ch = expr[i]
+        if q:
+            if ch == '\\' and i + 1 < n:
+                i += 2
+                continue
+            if ch == q:
+                segs.append((True, expr[start:i + 1]))
+                q = None
+                start = i + 1
+            i += 1
+            continue
+        if ch in "'\"":
+            if start < i:
+                segs.append((False, expr[start:i]))
+            q = ch
+            start = i
+            i += 1
+            continue
+        i += 1
+    if start < n:
+        segs.append((q is not None, expr[start:]))
+    return segs
+
+
 def _micro_expr_fixup(expr):
     """Oversett microdata-syntaks til gyldig Python:
     - ! → ~ (negasjon), men bevar !=
@@ -869,17 +1010,25 @@ def _micro_expr_fixup(expr):
         r'|(?<![\w.])\.\s*(?:==|!=|>=|<=|>|<)'
     )
     if '.' in expr:
-        if _is_disclosure_control() and re.search(_DOT_COMPARE_RE, expr):
+        # Strenglitteraler kan inneholde `.` (f.eks. generate kode = '.'),
+        # så både sammenligningssjekken og np.nan-omskrivingen må hoppe over
+        # tekst i anførselstegn (ellers ble '.' til litteralen 'np.nan').
+        _segs = _split_quote_segments(expr)
+        if _is_disclosure_control() and any(
+            (not is_q) and re.search(_DOT_COMPARE_RE, t) for is_q, t in _segs
+        ):
             raise ValueError(
                 "Sammenligning med `.` (Stata-syntaks som `x == .`) er ikke "
                 "gyldig i microdata.no. Bruk `sysmiss(x)` for å teste om en "
                 "verdi er missing (f.eks. `drop if sysmiss(x)`). "
                 "Tildeling med `= .` (f.eks. `generate x = .`) er OK."
             )
-        # Konverter enslige `.` til np.nan slik at både tildeling og
-        # arithmetikk med missing fungerer.
-        if re.search(_DOT_RE, expr):
-            expr = re.sub(_DOT_RE, 'np.nan', expr)
+        # Konverter enslige `.` (utenfor strenger) til np.nan slik at både
+        # tildeling og aritmetikk med missing fungerer.
+        if any((not is_q) and re.search(_DOT_RE, t) for is_q, t in _segs):
+            expr = ''.join(
+                t if is_q else re.sub(_DOT_RE, 'np.nan', t) for is_q, t in _segs
+            )
     # Steg 1: fjern ledende nuller utenfor strenger (f.eks. 01 → 1, 007 → 7)
     # Matcher komma/parentes + 0-prefiks + siffer(e), men ikke 0 alene eller 0.noe
     if '0' in expr:
@@ -983,7 +1132,7 @@ def _py_eval_expr(df, expr):
         for k, v in bindings.items():
             if isinstance(k, str) and k.isidentifier():
                 env[k] = v
-    # Kolonnenavn med @ (f.eks. date@panel) er ugyldige Python-identifikatorer.
+    # Kolonnenavn med @ (f.eks. panel@date) er ugyldige Python-identifikatorer.
     # Erstatt @ med _AT_ i både env-nøkler og uttrykket.
     at_cols = {}
     for col in df.columns:
@@ -1231,6 +1380,11 @@ _NORWAY_LATENT_LOG_INCOME_OTHER = 0.15
 _NORWAY_LATENT_TRANSFER_HURDLE_SHIFT = 0.04
 
 
+# NB: _norway_*-funksjonene under er deterministiske per (unit_id[, salt]) og
+# kalles per rad for HVER importerte variabel. lru_cache gjør gjentatte
+# importer til oppslag i stedet for md5 + Generator-konstruksjon per rad —
+# verdiene er bit-identiske med uncachet beregning.
+@lru_cache(maxsize=None)
 def _norway_latent_z(unit_id: int) -> float:
     """Deterministisk standardnormal fra unit_id (samme z for alle variabler på samme person)."""
     h = hashlib.md5(f"norway_latent_v1:{int(unit_id)}".encode()).digest()
@@ -1259,17 +1413,95 @@ def _rule_cond_value_equal(cv, v):
     return cv == v
 
 
+@lru_cache(maxsize=None)
 def _norway_demo_unit_seed(unit_id, salt: str) -> int:
     return int(hashlib.md5(f"{salt}:{int(unit_id)}".encode()).hexdigest(), 16) % (2**32)
 
 
+# NPR: dager siden 1970-01-01 for innleggelse (år 2015–2024). Deterministisk per
+# (person, episode) slik at UTDATO kan utlede den SAMME innleggelsesdatoen
+# uavhengig av importrekkefølge — ellers kan UTDATO < INNDATO (negativt opphold).
+_NPR_INNDATO_LO = 16436
+_NPR_INNDATO_HI = 20090
+
+
+def _norway_npr_inndato_days(unit_id, ep_id) -> int:
+    h = hashlib.md5(f"npr_inndato_v1:{int(unit_id)}:{int(ep_id)}".encode()).hexdigest()
+    return _NPR_INNDATO_LO + int(h, 16) % (_NPR_INNDATO_HI - _NPR_INNDATO_LO)
+
+
+def _coerce_code_value(code, is_alfa: bool):
+    """Tolk én kodeverdi som hovedløpet (_generate_variable_values): behold
+    streng for alfanumeriske/nullpolstrede koder ('0301', 'I'); konverter bare
+    rene heltall til int for numeriske variabler. Krasjer ALDRI på en
+    ikke-numerisk kode (panelet brukte tidligere int() på alt → ValueError)."""
+    cs = str(code)
+    if is_alfa:
+        return cs
+    return int(cs) if cs.lstrip('-').isdigit() else cs
+
+
+@lru_cache(maxsize=None)
 def _norway_synth_age_from_uid(unit_id) -> int:
-    """Deterministisk alder 18–67 (typisk yrkesaktiv) for demo når fødselsdato mangler."""
+    """Deterministisk alder 18–67 (typisk yrkesaktiv) for demo når fødselsdato mangler.
+    Brukt av entitets-/NPR-syntesen. For person-inntekt brukes den fulle
+    aldersfordelingen (_norway_demo_age_at) som også dekker barn og eldre."""
     r = np.random.default_rng(_norway_demo_unit_seed(unit_id, "alder"))
     a = int(round(r.normal(44.0, 14.0)))
     return max(18, min(67, a))
 
 
+@lru_cache(maxsize=None)
+def _norway_demo_birth_year_from_uid(unit_id) -> int:
+    """Deterministisk fødselsår per person med realistisk aldersfordeling (0–100 i
+    _DEMO_REF_YEAR, inkl. barn og eldre). Samme kilde for BEFOLKNING_FOEDSELS_AAR_MND
+    og for inntekts-/missing-syntesen, så alder er konsistent per person uavhengig
+    av importrekkefølge og aliaser."""
+    r = np.random.default_rng(_norway_demo_unit_seed(unit_id, "alder"))
+    a = max(0, min(100, int(round(r.normal(42.0, 23.0)))))
+    return _DEMO_REF_YEAR - a
+
+
+def _norway_demo_age_at(unit_id, ref_year=None) -> int:
+    """Alder for person ved ref_year (default _DEMO_REF_YEAR), fra deterministisk fødselsår."""
+    ry = _DEMO_REF_YEAR if ref_year is None else int(ref_year)
+    return max(0, min(110, ry - _norway_demo_birth_year_from_uid(unit_id)))
+
+
+# Andel MISSING (ikke i registeret) for kronebeløp, etter person-alder. Registerdata
+# i microdata.no er ikke 0 men MISSING for personer uten record — f.eks. har lønn
+# missing for barn, eldre og alle uten arbeidsforhold. Kurvene er kalibrert mot
+# observerte missing-andeler i microdata.no (lønn 2022: ~73 % totalt, U-formet).
+# x = alder, y = P(missing). Lineær interpolasjon mellom knekkpunktene.
+_MISS_WAGE_X = [0, 12, 13, 14, 15, 16, 17, 18, 20, 24, 30, 40, 50, 60, 62, 65, 67, 70, 74, 80, 85, 90, 110]
+_MISS_WAGE_Y = [1, 1, .96, .90, .79, .65, .53, .41, .39, .45, .51, .57, .55, .60, .61, .68, .75, .85, .92, .96, .99, 1, 1]
+# Samlet/brutto inntekt (skatteregister): nær komplett for voksne, barn stort sett missing.
+_MISS_INCOME_X = [0, 12, 15, 18, 80, 90, 110]
+_MISS_INCOME_Y = [.92, .85, .45, .06, .06, .12, .20]
+# Formue/kapital/gjeld/skatt/renter (skatteregister, voksne skattytere).
+_MISS_TAXREG_X = [0, 12, 17, 18, 100, 110]
+_MISS_TAXREG_Y = [.88, .82, .35, .05, .07, .12]
+
+
+def _norway_money_missing_prob(kind, ages):
+    """P(missing) per rad for et kronebeløp av gitt `kind`, gitt alder. Returnerer
+    None for mottaks-baserte typer (transfer/pension) der missing styres av den
+    eksisterende mottaks-hurdelen (ikke-mottaker → missing)."""
+    a = np.asarray(ages, dtype=float)
+    if kind == "wage_fallback":
+        return np.interp(a, _MISS_WAGE_X, _MISS_WAGE_Y)
+    if kind in ("income_total", "income_generic"):
+        return np.interp(a, _MISS_INCOME_X, _MISS_INCOME_Y)
+    if kind in ("transfer_hurdle", "pension_hurdle", "transfer_child"):
+        return None  # mottaks-hurdel → ikke-mottaker blir missing
+    if kind in ("wealth_net", "wealth_gross", "debt", "debt_unsecured",
+                "capital_financial", "real_capital_stock", "real_wealth_component",
+                "interest_flow", "interest_expense", "tax_amount", "capital_gain_loss"):
+        return np.interp(a, _MISS_TAXREG_X, _MISS_TAXREG_Y)
+    return np.interp(a, _MISS_TAXREG_X, _MISS_TAXREG_Y)
+
+
+@lru_cache(maxsize=None)
 def _norway_synth_kjonn_from_uid(unit_id) -> int:
     r = np.random.default_rng(_norway_demo_unit_seed(unit_id, "kjonn"))
     return 1 if r.random() < 0.51 else 2
@@ -1715,8 +1947,16 @@ def _norway_hurdle_lognormal_kr(rng, log_mu_row, sigma, p_zero, as_int=True):
     return raw.astype(float)
 
 
-def _norway_demo_money_array(meta, short_name, n_rows, rng, unit_ids=None, ages=None):
-    """Realistisk skjev fordeling for norske kroner; bruker samme latent z per unit_id som lønnsregler."""
+def _norway_demo_money_array(meta, short_name, n_rows, rng, unit_ids=None, ages=None, allow_missing=True):
+    """Realistisk skjev fordeling for norske kroner; bruker samme latent z per unit_id som lønnsregler.
+
+    Returnerer en FLOAT-array der personer uten record i registeret er MISSING
+    (np.nan), ikke 0 — slik microdata.no-registerdata faktisk er. Hvem som er
+    missing er aldersstrukturert (se _norway_money_missing_prob): lønn er missing
+    for barn, eldre og folk uten arbeidsforhold; stønader/pensjon er missing for
+    ikke-mottakere; formue/skatt er missing for barn. Mottaks-baserte beløp
+    beholder ekte 0 kun der det er meningsfullt (kapitalgevinst), ellers blir
+    ikke-mottaker missing."""
     if unit_ids is None:
         uid_arr = np.arange(1, n_rows + 1, dtype=np.int64)
     else:
@@ -1725,83 +1965,84 @@ def _norway_demo_money_array(meta, short_name, n_rows, rng, unit_ids=None, ages=
     z = np.array([_norway_latent_z(int(u)) for u in uid_arr])
     kind = _norway_classify_money_demo(meta, short_name)
     as_int = meta.get("data_type") == "int"
+    # Alder: bruk oppgitt vektor hvis den passer, ellers den deterministiske fulle
+    # aldersfordelingen per person (inkl. barn/eldre) — aldri 18–67-klemmen.
     ages_arr = None
     if ages is not None:
-        ages_arr = np.asarray(ages, dtype=float).reshape(-1)
-        if len(ages_arr) != n_rows:
-            ages_arr = None
+        aa = np.asarray(ages, dtype=float).reshape(-1)
+        if len(aa) == n_rows:
+            ages_arr = aa
+    if ages_arr is None:
+        ages_arr = np.array([_norway_demo_age_at(int(u)) for u in uid_arr], dtype=float)
 
+    # ── 1) Nivå (verdi for dem som HAR beløpet) ────────────────────────────────
+    miss = None  # bool-array av MISSING, eller None (settes per kind)
     if kind == "wealth_net":
-        log_mu_row = 13.85 + _NORWAY_LATENT_LOG_WEALTH_NET * z
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 1.38, as_int=True, min_v=0.0)
-    if kind == "wealth_gross":
-        log_mu_row = 14.42 + _NORWAY_LATENT_LOG_WEALTH_GROSS * z
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 1.28, as_int=True, min_v=0.0)
-    if kind == "wage_fallback":
-        if ages_arr is not None:
-            gender_arr = np.array([_norway_synth_kjonn_from_uid(int(u)) for u in uid_arr])
-            pz, log_mu_row = _norway_wage_age_gender_params(ages_arr, gender_arr, z)
-            return _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.52, pz, as_int=True)
-        log_mu_row = 13.12 + _NORWAY_LATENT_LOG_WAGE * z
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.42, as_int=True, min_v=0.0)
-    if kind == "transfer_hurdle":
+        x = _norway_lognormal_kr_rows(rng, 13.85 + _NORWAY_LATENT_LOG_WEALTH_NET * z, 1.38, as_int=True, min_v=0.0)
+    elif kind == "wealth_gross":
+        x = _norway_lognormal_kr_rows(rng, 14.42 + _NORWAY_LATENT_LOG_WEALTH_GROSS * z, 1.28, as_int=True, min_v=0.0)
+    elif kind == "wage_fallback":
+        # Yrkesinntekt: nivå med alders-/kjønnsprofil; missing (ikke 0) styrer hvem
+        # som har lønn (U-formet etter alder), så den interne 0-hurdelen droppes.
+        gender_arr = np.array([_norway_synth_kjonn_from_uid(int(u)) for u in uid_arr])
+        _pz, log_mu_row = _norway_wage_age_gender_params(ages_arr, gender_arr, z)
+        x = np.round(np.exp(log_mu_row + 0.52 * rng.standard_normal(n_rows)))
+        miss = rng.random(n_rows) < _norway_money_missing_prob("wage_fallback", ages_arr)
+    elif kind == "transfer_hurdle":
         snu = (short_name or "").upper()
-        # Sykepenger: aldersprofil når fødselsdato er importert (korrelasjon alder ↔ utbetaling)
-        if "SYKEPENGER" in snu and ages_arr is not None:
+        if "SYKEPENGER" in snu:
             pz, log_mu_row = _norway_sykepenger_hurdle_params(ages_arr, z)
-            return _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.52, pz, as_int=as_int)
-        # Øvrige stønader (AAP, foreldrepenger, FTRYG, …) — ofte null; nivå avhenger av tidligere lønn
-        pz = np.clip(0.80 - _NORWAY_LATENT_TRANSFER_HURDLE_SHIFT * z, 0.52, 0.92)
-        log_mu_row = 12.3 - 0.12 * z  # median ~220k for mottakere (AAP ~250k, sosial ~130k)
-        return _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.52, pz, as_int=as_int)
-    if kind == "pension_hurdle":
+        else:
+            pz = np.clip(0.80 - _NORWAY_LATENT_TRANSFER_HURDLE_SHIFT * z, 0.52, 0.92)
+            log_mu_row = 12.3 - 0.12 * z  # median ~220k for mottakere
+        x = _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.52, pz, as_int=as_int)
+        miss = x == 0  # ikke-mottaker → missing (ikke i stønadsregisteret)
+    elif kind == "pension_hurdle":
         pz = np.clip(0.55 - 0.05 * z, 0.25, 0.85)
-        log_mu_row = 12.5 + 0.18 * z  # median ~270k (alderspensjon ~270k, AFP ~350k)
-        return _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.48, pz, as_int=as_int)
-    if kind == "transfer_child":
+        x = _norway_hurdle_lognormal_kr(rng, 12.5 + 0.18 * z, 0.48, pz, as_int=as_int)
+        miss = x == 0
+    elif kind == "transfer_child":
         pz = np.clip(0.48 - 0.03 * z, 0.25, 0.72)
-        log_mu_row = 10.95 + 0.05 * z
-        return _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.38, pz, as_int=as_int)
-    if kind == "debt":
-        log_mu_row = 14.2 + 0.28 * z  # median ~1.5M (boliglån dominerer norsk gjeld)
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 1.05, as_int=True, min_v=0.0)
-    if kind == "debt_unsecured":
-        log_mu_row = 11.0 + 0.22 * z  # median ~60k (forbrukslån/kredittkort)
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.85, as_int=True, min_v=0.0)
-    if kind == "capital_financial":
-        log_mu_row = 12.55 + _NORWAY_LATENT_LOG_WEALTH_GROSS * 0.85 * z
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.95, as_int=True, min_v=0.0)
-    if kind == "real_capital_stock":
-        log_mu_row = 13.25 + _NORWAY_LATENT_LOG_WEALTH_NET * 0.9 * z
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.85, as_int=False, min_v=0.0)
-    if kind == "real_wealth_component":
-        log_mu_row = 12.85 + _NORWAY_LATENT_LOG_WEALTH_GROSS * 0.7 * z
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.9, as_int=as_int, min_v=0.0)
-    if kind == "capital_gain_loss":
-        pz = np.full(n_rows, 0.72)
-        log_mu_row = 9.5 + 0.1 * z
-        x = _norway_hurdle_lognormal_kr(rng, log_mu_row, 0.85, pz, as_int=as_int)
+        x = _norway_hurdle_lognormal_kr(rng, 10.95 + 0.05 * z, 0.38, pz, as_int=as_int)
+        miss = x == 0
+    elif kind == "debt":
+        x = _norway_lognormal_kr_rows(rng, 14.2 + 0.28 * z, 1.05, as_int=True, min_v=0.0)
+    elif kind == "debt_unsecured":
+        x = _norway_lognormal_kr_rows(rng, 11.0 + 0.22 * z, 0.85, as_int=True, min_v=0.0)
+    elif kind == "capital_financial":
+        x = _norway_lognormal_kr_rows(rng, 12.55 + _NORWAY_LATENT_LOG_WEALTH_GROSS * 0.85 * z, 0.95, as_int=True, min_v=0.0)
+    elif kind == "real_capital_stock":
+        x = _norway_lognormal_kr_rows(rng, 13.25 + _NORWAY_LATENT_LOG_WEALTH_NET * 0.9 * z, 0.85, as_int=False, min_v=0.0)
+    elif kind == "real_wealth_component":
+        x = _norway_lognormal_kr_rows(rng, 12.85 + _NORWAY_LATENT_LOG_WEALTH_GROSS * 0.7 * z, 0.9, as_int=as_int, min_v=0.0)
+    elif kind == "capital_gain_loss":
+        # Beholder ekte 0 (de fleste har ingen gevinst); barn fortsatt missing nedenfor.
+        x = _norway_hurdle_lognormal_kr(rng, 9.5 + 0.1 * z, 0.85, np.full(n_rows, 0.72), as_int=as_int)
         neg = rng.random(n_rows) < 0.45
         x = np.where(neg & (x > 0), -x, x)
-        return x
-    if kind == "interest_flow":
-        log_mu_row = 9.2 + 0.25 * z  # renteinntekter median ~10k (bankinnskudd)
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.9, as_int=as_int, min_v=0.0)
-    if kind == "interest_expense":
-        log_mu_row = 11.2 + 0.35 * z  # renteutgifter median ~73k (boliglånsrente)
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.85, as_int=as_int, min_v=0.0)
-    if kind == "tax_amount":
-        log_mu_row = 12.0 + 0.22 * z  # utlignet skatt median ~162k
-        return _norway_lognormal_kr_rows(rng, log_mu_row, 0.65, as_int=True, min_v=0.0)
-    if kind in ("income_total", "income_generic"):
-        log_mu_row = 13.2 + _NORWAY_LATENT_LOG_INCOME_OTHER * z  # bruttoinntekt median ~540k
-        return _norway_lognormal_kr_rows(
-            rng, log_mu_row, 0.55, as_int=as_int, min_v=0.0
-        )
-    log_mu_row = 12.9 + _NORWAY_LATENT_LOG_INCOME_OTHER * z
-    return _norway_lognormal_kr_rows(
-        rng, log_mu_row, 0.5, as_int=as_int, min_v=0.0
-    )
+    elif kind == "interest_flow":
+        x = _norway_lognormal_kr_rows(rng, 9.2 + 0.25 * z, 0.9, as_int=as_int, min_v=0.0)
+    elif kind == "interest_expense":
+        x = _norway_lognormal_kr_rows(rng, 11.2 + 0.35 * z, 0.85, as_int=as_int, min_v=0.0)
+    elif kind == "tax_amount":
+        x = _norway_lognormal_kr_rows(rng, 12.0 + 0.22 * z, 0.65, as_int=True, min_v=0.0)
+    elif kind in ("income_total", "income_generic"):
+        x = _norway_lognormal_kr_rows(rng, 13.2 + _NORWAY_LATENT_LOG_INCOME_OTHER * z, 0.55, as_int=as_int, min_v=0.0)
+    else:
+        x = _norway_lognormal_kr_rows(rng, 12.9 + _NORWAY_LATENT_LOG_INCOME_OTHER * z, 0.5, as_int=as_int, min_v=0.0)
+
+    # ── 2) MISSING-maske (ikke i registeret → np.nan) ─────────────────────────
+    # allow_missing=False (entitets-attributter som jobb-lønn) beholder gammel
+    # oppførsel uten NaN — der gir det ikke mening at en jobb-record «mangler» lønn.
+    x = np.asarray(x, dtype=float)
+    if allow_missing:
+        if miss is None:
+            mp = _norway_money_missing_prob(kind, ages_arr)
+            if mp is not None:
+                miss = rng.random(n_rows) < mp
+        if miss is not None:
+            x = np.where(miss, np.nan, x)
+    return x
 
 
 # Map detailed BEFOLKNING_REGSTAT_FAMTYP codes (25-code Norwegian standard,
@@ -1935,6 +2176,12 @@ class MockDataEngine:
         self._catalog_by_short = {}
         self.rule_based = {}
         self._external_meta_cache = {}
+        # Variabler der ekstern metadata/kodeliste IKKE lot seg laste, så vi
+        # falt tilbake til innebygde demo-verdier. Tømmes (drenéres) av
+        # interpretøren etter import for å vise en synlig ADVARSEL — ellers
+        # tabulerer forskeren mot demo-etiketter i den tro at de er ekte.
+        self._fallback_warnings = []
+        self._fallback_warned = set()
         # Globalt person-univers: deles av alle datasett slik at person-IDer
         # er konsistente uavhengig av importrekkefølge (person, jobb, NPR, …).
         self._person_universe = None
@@ -2082,6 +2329,13 @@ class MockDataEngine:
                 continue
         return {}
 
+    def drain_fallback_warnings(self) -> list:
+        """Returner og nullstill variabler som falt tilbake til demo-metadata
+        siden forrige kall (interpretøren logger dem som ADVARSEL)."""
+        w = self._fallback_warnings
+        self._fallback_warnings = []
+        return w
+
     def ensure_variable_resolved(self, short_name: str) -> None:
         """Lazy: slå inn external_metadata for én variabel når den skal brukes (import/generering).
 
@@ -2110,6 +2364,12 @@ class MockDataEngine:
         else:
             stub = dict(meta)
             stub['_external_merged_v1'] = True
+            # Ekstern metadata var konfigurert (ext_path satt) men kunne ikke
+            # lastes (404/nett/ugyldig JSON). Registrer en synlig advarsel én
+            # gang per variabel; vi faller tilbake til demo-verdier under.
+            if short_name not in self._fallback_warned:
+                self._fallback_warnings.append(short_name)
+                self._fallback_warned.add(short_name)
             # Nettverk/feil: bruk innebygd reservekun for kjente store variabler
             fb = _DEMO_FALLBACK_META.get(short_name)
             if fb:
@@ -2291,30 +2551,30 @@ class MockDataEngine:
         uids = np.arange(1, n_units + 1, dtype=np.int64)
         tid_vals = [int(d[:4]) if len(d) >= 4 else int(d) for d in dates_list] or [2010, 2011, 2012]
         rows = []
-        # Bygg date@panel fra tid-verdiene (YYYY -> YYYY-01-01)
+        # Bygg panel@date fra tid-verdiene (YYYY -> YYYY-01-01)
         date_map = {t: pd.Timestamp(f"{t}-01-01") for t in tid_vals}
 
         for uid in uids:
             for tid in tid_vals:
-                row = {'unit_id': uid, 'tid': tid, 'date@panel': date_map[tid]}
+                row = {'unit_id': uid, 'tid': tid, 'panel@date': date_map[tid]}
                 for var_path in vars_list:
                     vname = var_path.split('/')[-1]
                     self.ensure_variable_resolved(vname)
                     seed = int(hashlib.md5(f"{vname}_{uid}_{tid}".encode()).hexdigest(), 16) % (10**8)
                     rng = np.random.default_rng(seed)
                     meta = self.catalog.get(vname) or getattr(self, '_catalog_by_short', {}).get(vname) or {}
+                    _is_alfa = ('alfanumerisk' in str(meta.get('microdata_datatype', '')).lower()
+                                or meta.get('data_type') == 'string')
                     if meta.get('distribution'):
                         codes, probs = _normalize_distribution_weights(meta['distribution'])
                         if codes:
-                            row[vname] = int(rng.choice(codes, p=probs)) if str(codes[0]).isdigit() else rng.choice(codes, p=probs)
+                            row[vname] = _coerce_code_value(rng.choice(codes, p=probs), _is_alfa)
                     elif meta.get('labels') and isinstance(meta.get('labels'), dict):
                         codes = list(meta['labels'].keys())
-                        key_to_int = lambda k: int(k) if isinstance(k, str) and (k.lstrip('-').isdigit()) else k
-                        code_ints = [key_to_int(k) for k in codes]
-                        row[vname] = int(rng.choice(code_ints))
+                        row[vname] = _coerce_code_value(rng.choice(codes), _is_alfa)
                     elif meta.get('min') is not None or meta.get('max') is not None:
                         if _norway_classify_money_demo(meta, vname):
-                            arr = _norway_demo_money_array(meta, vname, 1, rng, unit_ids=np.array([uid]))
+                            arr = _norway_demo_money_array(meta, vname, 1, rng, unit_ids=np.array([uid]), allow_missing=False)
                             v = int(arr[0]) if str(meta.get('data_type', '')).lower() == 'int' else float(arr[0])
                             lo = meta.get('min')
                             if lo is not None:
@@ -2328,7 +2588,7 @@ class MockDataEngine:
                         m, s = meta.get('mean', 500000), meta.get('std', 100000)
                         dt = str(meta.get('data_type', '')).lower()
                         if _norway_classify_money_demo(meta, vname):
-                            arr = _norway_demo_money_array(meta, vname, 1, rng, unit_ids=np.array([uid]))
+                            arr = _norway_demo_money_array(meta, vname, 1, rng, unit_ids=np.array([uid]), allow_missing=False)
                             v = int(arr[0]) if dt == 'int' else float(arr[0])
                             lo, hi = meta.get('min'), meta.get('max')
                             if dt == 'int' and lo is not None:
@@ -2348,7 +2608,7 @@ class MockDataEngine:
                             row[vname] = rng.normal(m, s)
                     else:
                         if _norway_classify_money_demo(meta, vname):
-                            row[vname] = int(_norway_demo_money_array(meta, vname, 1, rng, unit_ids=np.array([uid]))[0])
+                            row[vname] = int(_norway_demo_money_array(meta, vname, 1, rng, unit_ids=np.array([uid]), allow_missing=False)[0])
                         else:
                             row[vname] = rng.normal(500000, 100000)
                 rows.append(row)
@@ -2396,9 +2656,11 @@ class MockDataEngine:
             n = int(len(current_df))
             base_df = None
 
-        # Deterministisk alder og kjønn per person (brukes til ICD-10-vekting)
+        # Deterministisk alder og kjønn per person (brukes til ICD-10-vekting).
+        # Kjønn må komme fra personens FAKTISKE kjønn, ikke inntekts-latenten —
+        # ellers får menn fødselsdiagnoser (O80) og «kvinner» er høyinntekt.
         ages   = np.array([_norway_synth_age_from_uid(int(uid)) for uid in unit_ids], dtype=np.int64)
-        gender = np.where(np.array([_norway_latent_z(int(uid)) for uid in unit_ids]) > 0, 2, 1).astype(np.int64)
+        gender = np.array([_norway_synth_kjonn_from_uid(int(uid)) for uid in unit_ids], dtype=np.int64)
 
         # Generer kolonneverdien
         col_name = var_name
@@ -2414,13 +2676,22 @@ class MockDataEngine:
                 col_vals = col_vals.astype(object)
                 col_vals[mask] = np.nan
         elif var_name == 'INNDATO':
-            # Dager siden 1970-01-01, år 2015–2024
-            col_vals = rng.integers(16436, 20090, size=n, dtype=np.int64)
+            # Deterministisk per episode (se _norway_npr_inndato_days), så UTDATO
+            # kan reprodusere samme dato uavhengig av importrekkefølge.
+            col_vals = np.array(
+                [_norway_npr_inndato_days(unit_ids[i], ep_ids[i]) for i in range(n)],
+                dtype=np.int64,
+            )
         elif var_name == 'UTDATO':
             if not fresh and 'INNDATO' in current_df.columns:
                 inn = current_df['INNDATO'].values.astype(np.float64)
             else:
-                inn = rng.integers(16436, 20090, size=n, dtype=np.int64).astype(np.float64)
+                # INNDATO ikke importert (ennå): utled den samme deterministiske
+                # innleggelsesdatoen, så UTDATO = INNDATO + opphold >= INNDATO.
+                inn = np.array(
+                    [_norway_npr_inndato_days(unit_ids[i], ep_ids[i]) for i in range(n)],
+                    dtype=np.float64,
+                )
             omsorg = current_df['OMSORGSNIVA'].values if (not fresh and 'OMSORGSNIVA' in current_df.columns) else None
             extra = np.zeros(n, dtype=np.float64)
             for i in range(n):
@@ -2507,8 +2778,12 @@ class MockDataEngine:
         id_col = _ENTITY_ID_COL.get(entity_type, 'unit_id')
         ref_col = _ENTITY_PERSON_REF_COL.get(entity_type, 'person_ref')
 
-        # Generer variabelverdier med person-basert latent-z for realisme
-        var_seed = int(hashlib.md5(var_name.encode()).hexdigest(), 16) % (10**8)
+        # Generer variabelverdier med person-basert latent-z for realisme.
+        # Seed på short_name (kanonisk variabel) + dato, ikke alias — ellers gir
+        # `import X as y` andre verdier enn `import X` (men ulike datoer skal
+        # fortsatt variere).
+        _seed_date = (parsed_args.get('date1') or '') if parsed_args else ''
+        var_seed = int(hashlib.md5(f"{short_name or var_name}:{_seed_date}".encode()).hexdigest(), 16) % (10**8)
         var_rng = np.random.default_rng(var_seed)
 
         ages_vec = np.array([_norway_synth_age_from_uid(int(u)) for u in person_ids], dtype=float)
@@ -2572,12 +2847,23 @@ class MockDataEngine:
             days = rng.integers(1, 29, size=n_rows)
             return (years * 10000 + months * 100 + days).astype(int).tolist()
         if data_type.startswith('date:yyyymm'):
+            # Samme deterministiske-per-uid fødselsår som hovedløpet (generate()):
+            # ellers fikk multi-record-enheter (jobb/kjøretøy/kurs) tilfeldige
+            # fødselsdatoer, så en persons alder var ulik på person- og enhetsrad.
             _d1 = (parsed_args or {}).get('date1')
-            ref_year = int(str(_d1)[:4]) if _d1 else _DEMO_REF_YEAR
-            ages = rng.normal(loc=44, scale=21, size=n_rows)
-            ages = np.clip(ages, 0, 100).astype(int)
-            years = np.clip(ref_year - ages, 1900, ref_year)
+            if _d1:
+                ref_year = int(str(_d1)[:4]); ref_month = int(str(_d1)[5:7])
+            else:
+                ref_year = _DEMO_REF_YEAR; ref_month = 12
+            if uids is not None and len(uids) == n_rows:
+                years = np.array([_norway_demo_birth_year_from_uid(int(u)) for u in uids], dtype=np.int64)
+            else:
+                ages = np.clip(rng.normal(loc=44, scale=21, size=n_rows), 0, 100).astype(int)
+                years = ref_year - ages
+            years = np.clip(years, 1900, ref_year)
             months = rng.integers(1, 13, size=n_rows)
+            at_ref_year = (years == ref_year)
+            months = np.where(at_ref_year, np.minimum(months, ref_month), months)
             return (years * 100 + months).astype(int).tolist()
         if data_type.startswith('date:epoch'):
             years = rng.integers(1990, 2026, size=n_rows)
@@ -2694,13 +2980,26 @@ class MockDataEngine:
 
         ages_vec = _norway_demo_ages_from_current_df(current_df)
         if ages_vec is None and len(_pids) > 0:
-            ages_vec = np.array([_norway_synth_age_from_uid(int(u)) for u in _pids], dtype=float)
+            # Realistisk alder per person (inkl. barn/eldre) ved importårets referanse,
+            # konsistent med BEFOLKNING_FOEDSELS_AAR_MND. Driver alders­strukturen i
+            # inntekt/missing — ALDRI 18–67-klemmen for persondata.
+            _ref_y = None
+            _d1 = (parsed_args or {}).get('date1')
+            if _d1:
+                try: _ref_y = int(str(_d1)[:4])
+                except (ValueError, TypeError): _ref_y = None
+            ages_vec = np.array([_norway_demo_age_at(int(u), _ref_y) for u in _pids], dtype=float)
         gender_vec = (np.array([_norway_synth_kjonn_from_uid(int(u)) for u in _pids], dtype=np.int8)
                       if len(_pids) > 0 else None)
         z_vec = (np.array([_norway_latent_z(int(u)) for u in _pids], dtype=float)
                  if len(_pids) > 0 else None)
 
-        seed = int(hashlib.md5(var_name.encode()).hexdigest(), 16) % (10**8)
+        # Seed på short_name (kanonisk variabel) + dato, IKKE alias. Da gir
+        # `import X as y` samme verdier som `import X` (alias-uavhengig), mens
+        # samme variabel på ulike datoer fortsatt varierer over tid (datoen er
+        # den legitime differensiatoren, ikke aliaset).
+        _seed_date = (parsed_args.get('date1') or '') if parsed_args else ''
+        seed = int(hashlib.md5(f"{short_name or var_name}:{_seed_date}".encode()).hexdigest(), 16) % (10**8)
         rng = np.random.default_rng(seed)
 
         data = {_src_id: uids}
@@ -2835,9 +3134,14 @@ class MockDataEngine:
                 else:
                     ref_year = _DEMO_REF_YEAR
                     ref_month = 12
-                ages = rng.normal(loc=44, scale=21, size=n_rows)
-                ages = np.clip(ages, 0, 100).astype(int)
-                years = ref_year - ages
+                # Fødselsår per person (deterministisk per uid) — samme kilde som
+                # inntekts-/missing-syntesen, så alder er konsistent uavhengig av
+                # importrekkefølge/alias. Født-etter-snapshot kappes til ref_year.
+                if uids is not None and len(uids) == n_rows:
+                    years = np.array([_norway_demo_birth_year_from_uid(int(u)) for u in uids], dtype=np.int64)
+                else:
+                    ages = np.clip(rng.normal(loc=44, scale=21, size=n_rows), 0, 100).astype(int)
+                    years = ref_year - ages
                 years = np.clip(years, 1900, ref_year)
                 months = rng.integers(1, 13, size=n_rows)
                 # Kapp måned for personer født i referanseåret
@@ -2910,7 +3214,8 @@ class MockDataEngine:
                 # Heltall i kroner (microdata): mean/std → avrundet normalfordeling, valgfri min/max
                 elif str(meta.get('data_type', '')).lower() == 'int' and (meta.get('mean') is not None or meta.get('std') is not None):
                     m, s = meta.get('mean', 500000), meta.get('std', 100000)
-                    if _norway_classify_money_demo(meta, short_name):
+                    _is_money = _norway_classify_money_demo(meta, short_name)
+                    if _is_money:
                         raw = _norway_demo_money_array(
                             meta, short_name, n_rows, rng, unit_ids=uids, ages=ages_vec
                         )
@@ -2921,7 +3226,8 @@ class MockDataEngine:
                         raw = np.maximum(raw, int(lo))
                     if hi is not None:
                         raw = np.minimum(raw, int(hi))
-                    data[var_name] = [int(x) for x in raw]
+                    # Penger kan inneholde MISSING (np.nan) → behold float; ellers heltall.
+                    data[var_name] = np.asarray(raw, dtype=float) if _is_money else [int(x) for x in raw]
                 elif isinstance(labels, dict) and labels:
                     # Med labels: trekk kun blant kodeverdier (uniformt hvis ingen distribution over)
                     codes_all = list(labels.keys())
@@ -2951,7 +3257,8 @@ class MockDataEngine:
                         lo = meta.get('min')
                         if lo is not None:
                             arr = np.maximum(arr, int(lo))
-                        data[var_name] = [int(x) for x in arr] if meta.get('data_type') == 'int' else arr.astype(float)
+                        # Penger kan inneholde MISSING (np.nan) → alltid float.
+                        data[var_name] = np.asarray(arr, dtype=float)
                     else:
                         lo = meta.get('min', 0)
                         hi = meta.get('max', 9999)
@@ -3478,6 +3785,9 @@ class DataTransformHandler:
 
         if cmd == 'destring':
             ignore_chars = options.get('ignore', '') or ''
+            # ignore('.,-'): anførselstegnene er streng-skilletegn, ikke tegn
+            # som skal fjernes. Strip dem så de ikke ved et uhell fjernes fra data.
+            ignore_chars = str(ignore_chars).strip('\'"')
             force = bool(options.get('force'))
             dpcomma = bool(options.get('dpcomma'))
             prefix = options.get('prefix', '') or ''
@@ -3485,13 +3795,27 @@ class DataTransformHandler:
             for v in args['vars']:
                 if v not in df.columns:
                     continue
+                orig_na = df[v].isna()
                 src = df[v].astype(str)
                 if dpcomma:
                     # Erstatt desimalkomma med punktum
                     src = src.str.replace(',', '.', regex=False)
                 for ch in str(ignore_chars):
                     src = src.str.replace(ch, '', regex=False)
-                converted = pd.to_numeric(src, errors='coerce' if force else 'coerce')
+                converted = pd.to_numeric(src, errors='coerce')
+                if not force:
+                    # Manualen: uten force avbrytes HELE operasjonen hvis noen
+                    # verdier inneholder ikke-numeriske karakterer. Ekte missing
+                    # (NaN / tom streng) regnes ikke som ikke-numerisk.
+                    bad = converted.isna() & ~orig_na & (src.str.strip() != '')
+                    if bad.any():
+                        sample = list(dict.fromkeys(src[bad].tolist()))[:3]
+                        raise ValueError(
+                            f"destring: variabelen '{v}' inneholder ikke-numeriske "
+                            f"verdier (f.eks. {', '.join(repr(s) for s in sample)}). "
+                            f"Operasjonen ble ikke gjennomført. Bruk 'force' for å "
+                            f"konvertere slike verdier til missing."
+                        )
                 new_col = f"{prefix}{v}{suffix}"
                 df[new_col] = converted
             return None
@@ -3499,7 +3823,10 @@ class DataTransformHandler:
         if cmd == 'reshape-to-panel':
             prefixes = args.get('prefixes', [])
             if not prefixes:
-                return None
+                raise ValueError(
+                    "reshape-to-panel krever minst ett variabel-prefiks, "
+                    "f.eks. `reshape-to-panel lonn` når datasettet har lonn2014, lonn2018."
+                )
             id_col = _get_df_key_col(df) or df.index.name or 'id'
             id_col = id_col if id_col in df.columns else df.columns[0]
             stub_cols = {}
@@ -3513,23 +3840,44 @@ class DataTransformHandler:
                             stub_cols.setdefault(pre, []).append((col, suf))
                             time_vals.add(suf)
             if not stub_cols:
-                return None
+                _cols = ', '.join(str(c) for c in df.columns)
+                raise ValueError(
+                    "reshape-to-panel fant ingen variabler å panele for prefiks(ene) "
+                    f"{', '.join(prefixes)}. Den trenger kolonner på formen <prefiks><suffiks> "
+                    "der suffikset er tall/dato (f.eks. lonn2014, lonn2018 → prefiks `lonn`). "
+                    "Importer samme variabel på flere datoer med ulike navn FØR reshape, "
+                    f"f.eks. `import db/INNTEKT_WLONN 2014-12-31 as lonn2014`. "
+                    f"Kolonner i datasettet nå: {_cols}."
+                )
             time_vals = sorted(time_vals)
-            rows = []
-            for _, row in df.iterrows():
-                for t in time_vals:
-                    r = {id_col: row.get(id_col, row.name)}
-                    r['tid'] = t
-                    r['date@panel'] = t  # microdata.no hjelpevariabel
-                    for pre, cols in stub_cols.items():
-                        for full, suf in cols:
-                            if suf == t:
-                                r[pre] = row.get(full, np.nan)
-                    for c in df.columns:
-                        if c not in [x for pcols in stub_cols.values() for x, _ in pcols]:
-                            r[c] = row.get(c, np.nan)
-                    rows.append(r)
-            return pd.DataFrame(rows)
+            # Vektorisert long-bygging: rad-major (enhet × tid stigende), som
+            # microdata.no. Hver kolonne bygges som én (n × T)-blokk som
+            # raveles — ingen per-rad-løkker (iterrows hang nettleseren).
+            n = len(df)
+            n_t = len(time_vals)
+            stub_set = {full for pcols in stub_cols.values() for full, _ in pcols}
+            rep_idx = np.repeat(np.arange(n), n_t)  # rad 0 × T, rad 1 × T, ...
+            out = pd.DataFrame(index=pd.RangeIndex(n * n_t))
+            if id_col in df.columns:
+                out[id_col] = df[id_col].to_numpy()[rep_idx]
+            else:
+                out[id_col] = np.repeat(df.index.to_numpy(), n_t)
+            tid_block = np.tile(np.asarray(time_vals, dtype=object), n)
+            out['tid'] = tid_block
+            out['panel@date'] = tid_block  # microdata.no hjelpevariabel (jf. dok.)
+            for pre, cols in stub_cols.items():
+                suf_to_col = {suf: full for full, suf in cols}
+                per_t = [
+                    df[suf_to_col[t]].reset_index(drop=True)
+                    if t in suf_to_col else pd.Series(np.nan, index=range(n))
+                    for t in time_vals
+                ]
+                # (n × T) → ravel i rad-major rekkefølge matcher rep_idx/tile
+                out[pre] = pd.concat(per_t, axis=1).to_numpy().ravel(order='C')
+            for c in df.columns:
+                if c not in stub_set and c != id_col:
+                    out[c] = df[c].to_numpy()[rep_idx]
+            return out
 
         if cmd == 'reshape-from-panel':
             if 'tid' not in df.columns:
@@ -3542,18 +3890,26 @@ class DataTransformHandler:
         if cmd == 'recode':
             # Samle opp nye labels per variabel når regler har tekstetiketter
             new_labels_per_var = {}
+            # Linjenivå 'if': begrens omkodingen til radene som matcher
+            row_mask = _line_condition_mask(df, cond, options) if cond else None
+            prefix = args.get('prefix') or ''
             for var in args['vars']:
                 if var not in df.columns:
                     continue
                 # Viktig: intervaller bruker >= / <= — object-strenger ("47") matcher ikke 45–47.
+                raw_orig = df[var].copy()  # bevares urørt ved prefix()
                 was_string = df[var].dtype == object or pd.api.types.is_string_dtype(df[var])
-                df[var] = pd.to_numeric(df[var], errors='coerce')
+                out_col = pd.to_numeric(df[var], errors='coerce')
+                # Manualen: "Verdier som allerede er omkodet påvirkes ikke av
+                # påfølgende regler" — masker bygges fra ORIGINALverdiene, og
+                # rader som alt er omkodet beskyttes mot senere regler.
+                orig = out_col.copy()
+                recoded = pd.Series(False, index=df.index)
                 for rule in args['rules']:
                     rule = rule.strip()
                     if '=' not in rule:
                         continue
-                    # Frisk kolonnereferanse etter hver regel (trygt ved kjedeoppdateringer)
-                    col = df[var]
+                    col = orig
                     lhs, rhs = rule.split('=', 1)
                     rhs = rhs.strip()
                     # Word/Excel kan lime inn typografiske anførsel — normaliser til ASCII for regex
@@ -3595,16 +3951,33 @@ class DataTransformHandler:
                             else:
                                 new_val = rhs
                     lhs = lhs.strip()
-                    # Sjekk for 'miss' (missing-verdi) i lhs
-                    if re.fullmatch(r'miss(?:ing)?', lhs, re.IGNORECASE):
-                        mask = col.isna()
+
+                    def _apply_rule(mask):
+                        """Skriv new_val der mask holder — unntatt rader som alt
+                        er omkodet av en tidligere regel, og (ved if) rader
+                        utenfor betingelsen."""
+                        nonlocal recoded
                         if hasattr(mask, 'fillna'):
                             mask = mask.fillna(False)
-                        df.loc[mask, var] = new_val
+                        mask = mask & ~recoded
+                        if row_mask is not None:
+                            mask = mask & row_mask
+                        out_col.loc[mask] = new_val
+                        recoded = recoded | mask
                         if label_text is not None and isinstance(new_val, (int, float)):
                             if self.label_manager is not None:
                                 d = new_labels_per_var.setdefault(var, {})
                                 d[int(new_val)] = label_text
+
+                    # Spesialkoder i lhs: missing / nonmissing / * (enhver verdi)
+                    if re.fullmatch(r'miss(?:ing)?', lhs, re.IGNORECASE):
+                        _apply_rule(col.isna())
+                        continue
+                    if re.fullmatch(r'nonmiss(?:ing)?', lhs, re.IGNORECASE):
+                        _apply_rule(col.notna())
+                        continue
+                    if lhs == '*':
+                        _apply_rule(pd.Series(True, index=df.index))
                         continue
                     # Tokeniser på whitespace først; hvert token kan være én verdi eller en range (lo/hi).
                     # Støtter mixed list+range, f.eks. "1 2 3 5/10".
@@ -3649,35 +4022,36 @@ class DataTransformHandler:
                     mask = col.isin(vals)
                     for lo_val, hi_val in ranges:
                         mask = mask | ((col >= lo_val) & (col <= hi_val))
-                    if hasattr(mask, 'fillna'):
-                        mask = mask.fillna(False)
-                    df.loc[mask, var] = new_val
-                    # Hvis vi har labeltekst og new_val er en kode, samle opp for labels
-                    if label_text is not None and isinstance(new_val, (int, float)):
-                        if self.label_manager is not None:
-                            d = new_labels_per_var.setdefault(var, {})
-                            d[int(new_val)] = label_text
+                    _apply_rule(mask)
                 # Hele tall etter recode → nullable int (bedre tabulate/etiketter; unngår 8.0 vs 8)
-                s = df[var]
-                if pd.api.types.is_numeric_dtype(s):
-                    sub = s.dropna()
+                if pd.api.types.is_numeric_dtype(out_col):
+                    sub = out_col.dropna()
                     if len(sub):
                         arr = sub.to_numpy(dtype=float, copy=False)
                         if np.all(np.isfinite(arr)) and np.all(arr == np.round(arr)):
-                            df[var] = s.round().astype('Int64')
+                            out_col = out_col.round().astype('Int64')
                 # Bevar string-dtype: var variabelen strenger FØR recode, konverter tilbake.
                 # Dette sikrer at f.eks. parstatus == '1' virker etter recode.
                 if was_string:
-                    df[var] = df[var].apply(
+                    out_col = out_col.apply(
                         lambda x: str(int(x)) if pd.notna(x) else None
                     ).astype(object)
+                # prefix()/generate(): nye variabler med omkodete verdier,
+                # originalen beholdes urørt (manualen). Uten prefix: overskriv.
+                if prefix:
+                    df[var] = raw_orig
+                    df[f"{prefix}{var}"] = out_col
+                else:
+                    df[var] = out_col
             # Etter at alle regler er brukt, oppdater LabelManager med nye labels
+            # (ved prefix() hører de nye etikettene til den nye variabelen)
             if self.label_manager is not None and new_labels_per_var:
                 for var, mapping in new_labels_per_var.items():
+                    label_var = f"{prefix}{var}" if prefix else var
                     pairs = list(mapping.items())
-                    codelist_name = f"{var}_recode"
+                    codelist_name = f"{label_var}_recode"
                     self.label_manager.define_labels(codelist_name, pairs)
-                    self.label_manager.assign_labels(var, codelist_name)
+                    self.label_manager.assign_labels(label_var, codelist_name)
             return None
 
         return None
@@ -3872,70 +4246,109 @@ class LabelManager:
             pass
         return None
 
-    def format_value(self, var_name, value):
-        """Returnerer label for verdi, eller råverdi hvis ingen label."""
+    @staticmethod
+    def _code_to_str(v):
+        """Konverter kodeverdi til streng for 'both'-visning. 301.0 → '301'."""
+        if isinstance(v, float):
+            try:
+                if math.isfinite(v) and v == int(v):
+                    return str(int(v))
+            except (ValueError, OverflowError):
+                pass
+        return str(v)
+
+    def format_value(self, var_name, value, fmt='label'):
+        """Returnerer formatert verdi etter fmt-modus.
+
+        fmt='label' (default — bakoverkompat): returner label, eller kode hvis ingen label.
+        fmt='code': returner kode (ingen lookup).
+        fmt='both': returner "kode - label", eller bare kode hvis ingen label.
+        Total-rader (verdi == 'Total') og NaN passerer uendret.
+        """
         if pd.isna(value):
+            return value
+        if fmt == 'code':
             return value
         cl = self.get_codelist_for_var(var_name)
         if cl is None:
             return value
         lbl = self._lookup_label_in_codelist(cl, value, var_name)
-        if lbl is not None:
+        if lbl is None:
+            return value
+        if fmt == 'label':
             return lbl
-        return value
+        # fmt == 'both'
+        return f"{self._code_to_str(value)} - {lbl}"
 
-    def apply_labels_to_series(self, series, var_name):
-        """Mapper series index/values til labels. Returnerer ny Series."""
+    def apply_labels_to_series(self, series, var_name, fmt='label'):
+        """Mapper series index til formatert visning. Returnerer ny Series."""
         cl = self.get_codelist_for_var(var_name)
-        if not cl:
+        if not cl and fmt != 'code':
             return series
         def _lookup(v):
             if pd.isna(v):
                 return v
+            # Bevar Total-rad
+            if isinstance(v, str) and v == 'Total':
+                return v
+            if fmt == 'code':
+                return v
+            if cl is None:
+                return v
             lbl = self._lookup_label_in_codelist(cl, v, var_name)
-            if lbl is not None:
+            if lbl is None:
+                try:
+                    sv = str(v)
+                    if sv in cl:
+                        lbl = cl[sv]
+                except (ValueError, TypeError):
+                    pass
+            if lbl is None:
+                return v
+            if fmt == 'label':
                 return lbl
-            try:
-                sv = str(v)
-                if sv in cl:
-                    return cl[sv]
-            except (ValueError, TypeError):
-                pass
-            return v
+            return f"{self._code_to_str(v)} - {lbl}"
         if hasattr(series, 'index'):
             new_index = [_lookup(x) for x in series.index]
             return pd.Series(series.values, index=new_index)
         return series
 
-    def apply_labels_to_frame(self, obj, var1, var2=None):
-        """Mapper DataFrame/Series indeks og kolonner til labels."""
+    def apply_labels_to_frame(self, obj, var1, var2=None, fmt='label'):
+        """Mapper DataFrame/Series indeks og kolonner til formatert visning."""
         cl1 = self.get_codelist_for_var(var1)
         cl2 = self.get_codelist_for_var(var2) if var2 else None
-        if not cl1 and not cl2:
+        if not cl1 and not cl2 and fmt != 'code':
             return obj
         def _lookup(cl, val, vname):
-            if cl is None:
-                return val
             if pd.isna(val):
                 return val
+            if isinstance(val, str) and val == 'Total':
+                return val
+            if fmt == 'code':
+                return val
+            if cl is None:
+                return val
             lbl = self._lookup_label_in_codelist(cl, val, vname)
-            if lbl is not None:
+            if lbl is None:
+                try:
+                    sv = str(val)
+                    if sv in cl:
+                        lbl = cl[sv]
+                except (ValueError, TypeError):
+                    pass
+            if lbl is None:
+                return val
+            if fmt == 'label':
                 return lbl
-            try:
-                sv = str(val)
-                if sv in cl:
-                    return cl[sv]
-            except (ValueError, TypeError):
-                pass
-            return val
+            return f"{self._code_to_str(val)} - {lbl}"
         if isinstance(obj, pd.Series):
-            idx = [_lookup(cl1, x, var1) for x in obj.index] if cl1 else obj.index.tolist()
+            idx = [_lookup(cl1, x, var1) for x in obj.index] if (cl1 or fmt == 'code') else obj.index.tolist()
             return pd.Series(obj.values, index=idx)
         if isinstance(obj, pd.DataFrame):
             df = obj.copy()
-            if cl1 and hasattr(df.index, 'tolist'):
+            if (cl1 or fmt == 'code') and hasattr(df.index, 'tolist'):
                 df.index = [_lookup(cl1, x, var1) for x in df.index]
-            if cl2 and hasattr(df.columns, 'tolist'):
+            if (cl2 or fmt == 'code') and hasattr(df.columns, 'tolist'):
                 df.columns = [_lookup(cl2, x, var2) for x in df.columns]
             return df
         return obj
@@ -3947,6 +4360,19 @@ class LabelManager:
             return f"Kodeliste eller variabel '{codelist_or_var}' ikke funnet."
         lines = [f"  {k}: {v}" for k, v in sorted(cl.items(), key=lambda x: (str(x[0]), x[0]))]
         return "Kodeliste " + codelist_or_var + ":\n" + "\n".join(lines)
+
+
+def _parse_count_option(opt_val, default=10):
+    """Parse antall fra opsjoner som top(n)/bottom(n).
+
+    Parseren lagrer opsjoner uten argument som True — da gjelder default
+    (int(True) ville gitt 1, dvs. topp-1 i stedet for topp-10)."""
+    if opt_val is True:
+        return default
+    try:
+        return int(opt_val)
+    except (ValueError, TypeError):
+        return default
 
 
 class StatsEngine:
@@ -4223,8 +4649,150 @@ class StatsEngine:
             var2 = args[1] if len(args) > 1 else None
             dropna = 'missing' not in options
 
+            # Label-format: per-kommando-opsjon → script-direktiv/UI → modul-default
+            if 'nolabels' in options:
+                label_fmt = 'code'
+            elif 'novalues' in options:
+                label_fmt = 'label'
+            else:
+                label_fmt = _get_default('label_format') or 'both'
+
+            def _t5_small_cell_check():
+                """T5: avsløringskontroll — stopp tabeller med for mange små
+                celler. Sjekkes på RÅ tellinger av cellene (uavhengig av om
+                bruker vil ha prosenter eller en volumtabell via summarize())."""
+                if not _is_disclosure_control():
+                    return
+                if var2:
+                    _raw_counts = pd.crosstab(df[var1], df[var2], dropna=dropna)
+                else:
+                    _raw_counts = df[var1].value_counts(dropna=not dropna)
+                _flat = _raw_counts.values.flatten() if hasattr(_raw_counts, 'values') else _raw_counts.to_numpy().flatten()
+                _total_cells = len(_flat)
+                if _total_cells > 0:
+                    _low_cell = _dc_threshold('dc_tabulate_low_cell')
+                    _low_cells = int((_flat < _low_cell).sum())
+                    _low_ratio = _low_cells / _total_cells
+                    if _low_ratio > _DC_TABULATE_LOW_RATIO:
+                        raise ValueError(
+                            f"Tabellen kan ikke vises pga. for mange små celler "
+                            f"({_low_cells} av {_total_cells} celler har frekvens "
+                            f"<{_low_cell}, dvs. {_low_ratio*100:.0f}% — "
+                            f"grensen er {int(_DC_TABULATE_LOW_RATIO*100)}%). "
+                            f"Reduser antall kategorier eller utvid populasjonen."
+                        )
+
+            def _parse_sort_arg(opt_val):
+                """Parse argument til rowsort()/colsort(). Returnerer kodeverdi eller None."""
+                if opt_val is True or opt_val is None:
+                    return None
+                s = str(opt_val).strip()
+                if not s:
+                    return None
+                # 2D-tabeller: bruk første token (multidim-tabeller støttes ikke her)
+                first = s.split(',')[0].strip()
+                if (first.startswith("'") and first.endswith("'")) or \
+                   (first.startswith('"') and first.endswith('"')):
+                    return first[1:-1]
+                for caster in (int, float):
+                    try:
+                        return caster(first)
+                    except (ValueError, TypeError):
+                        pass
+                return first
+
+            def _find_key_in_index(idx, key):
+                """Finn key i en pandas Index — prøv as-is, str, int, float."""
+                if key in idx:
+                    return key
+                s_key = str(key)
+                if s_key in idx:
+                    return s_key
+                try:
+                    i_key = int(key)
+                    if i_key in idx:
+                        return i_key
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    f_key = float(key)
+                    if f_key in idx:
+                        return f_key
+                except (ValueError, TypeError):
+                    pass
+                return None
+
+            def _sort_tab_frame(df_in, opts):
+                """Sortér DataFrame-tabell ved rowsort()/colsort(). Bevarer Total-rad/kol."""
+                if 'rowsort' not in opts and 'colsort' not in opts:
+                    return df_in
+                has_total_row = 'Total' in df_in.index
+                has_total_col = 'Total' in df_in.columns
+                total_row_saved = df_in.loc[['Total']] if has_total_row else None
+                data = df_in.drop(index='Total') if has_total_row else df_in.copy()
+
+                if 'rowsort' in opts:
+                    key = _parse_sort_arg(opts.get('rowsort'))
+                    if key is None:
+                        target = 'Total' if has_total_col else (data.columns[-1] if len(data.columns) else None)
+                    else:
+                        target = _find_key_in_index(data.columns, key)
+                    if target is not None and target in data.columns:
+                        # Konverter til numerisk for stabil sortering hvis mulig
+                        sort_vals = pd.to_numeric(data[target], errors='coerce')
+                        order = sort_vals.sort_values(kind='stable').index
+                        data = data.loc[order]
+
+                if 'colsort' in opts:
+                    key = _parse_sort_arg(opts.get('colsort'))
+                    sort_series_for_cols = None
+                    if key is None:
+                        if has_total_row:
+                            sort_series_for_cols = total_row_saved.iloc[0]
+                    else:
+                        row_label = _find_key_in_index(data.index, key)
+                        if row_label is not None:
+                            sort_series_for_cols = data.loc[row_label]
+                    if sort_series_for_cols is not None:
+                        non_total_cols = [c for c in data.columns if c != 'Total']
+                        numeric_vals = pd.to_numeric(sort_series_for_cols, errors='coerce')
+                        sorted_cols = sorted(non_total_cols,
+                                             key=lambda c: (numeric_vals.get(c) if pd.notna(numeric_vals.get(c)) else float('inf')))
+                        if 'Total' in data.columns:
+                            sorted_cols.append('Total')
+                        data = data[sorted_cols]
+
+                if total_row_saved is not None:
+                    # Sortér Total-rad-kolonner i samme rekkefølge som data
+                    total_row_saved = total_row_saved[data.columns]
+                    data = pd.concat([data, total_row_saved])
+                return data
+
+            def _sort_tab_series(s, opts):
+                """Sortér Series-tabell ved rowsort()/colsort(). Bevarer Total."""
+                if 'rowsort' not in opts and 'colsort' not in opts:
+                    return s
+                has_total = 'Total' in s.index
+                if has_total:
+                    total_val = s['Total']
+                    data = s.drop('Total')
+                else:
+                    data = s
+                if 'rowsort' in opts:
+                    # rowsort på 1D Series → sortér på verdiene (snittinntekt, frekvens, …)
+                    data = data.sort_values(kind='stable')
+                elif 'colsort' in opts:
+                    # colsort på 1D Series → sortér på indeks (kodeverdi)
+                    data = data.sort_index(kind='stable')
+                if has_total:
+                    data = pd.concat([data, pd.Series([total_val], index=['Total'])])
+                return data
+
             if 'summarize' in options:
                 # Volumtabell: summarize(var [, var2 ...]) [mean|std|sum|p50|p25|p75|gini|iqr]
+                # En gjennomsnitts-/sum-tabell over små celler avslører nær-individuelle
+                # verdier akkurat som en frekvenstabell, så T5 gjelder også her.
+                _t5_small_cell_check()
                 # summarize kan inneholde én eller flere komma-separerte variabler
                 val_var_spec = options['summarize']
                 val_vars = [v.strip() for v in str(val_var_spec).split(',') if v.strip()]
@@ -4254,11 +4822,12 @@ class StatsEngine:
                         else:
                             total_val = getattr(df[val_var], agg_func)()
                         tb = pd.concat([tb, pd.Series([total_val], index=['Total'])])
+                # rowsort() / colsort() — bevar Total
+                if isinstance(tb, pd.DataFrame):
+                    tb = _sort_tab_frame(tb, options)
+                elif isinstance(tb, pd.Series):
+                    tb = _sort_tab_series(tb, options)
                 # top(n) / bottom(n) — bevar Total-rad/kolonne
-                def _parse_n(opt_val, default=10):
-                    if opt_val is True: return default
-                    try: return int(opt_val)
-                    except (ValueError, TypeError): return default
                 if 'top' in options or 'bottom' in options:
                     # Lagre og fjern Total før slicing
                     if isinstance(tb, pd.DataFrame) and 'Total' in tb.index:
@@ -4276,10 +4845,10 @@ class StatsEngine:
                         total_col_saved = None
                         tb_data = tb
                     if 'top' in options:
-                        n = _parse_n(options.get('top'), 10)
+                        n = _parse_count_option(options.get('top'))
                         tb_data = tb_data.head(n) if hasattr(tb_data, 'head') else tb_data.iloc[:n]
                     elif 'bottom' in options:
-                        n = _parse_n(options.get('bottom'), 10)
+                        n = _parse_count_option(options.get('bottom'))
                         tb_data = tb_data.tail(n) if hasattr(tb_data, 'tail') else tb_data.iloc[-n:]
                     # Legg tilbake Total
                     if isinstance(tb_data, pd.DataFrame) and total_row_saved is not None:
@@ -4295,9 +4864,9 @@ class StatsEngine:
                     tb = tb.to_frame().reset_index()
                 lm = options.get('_label_manager')
                 if lm and var2:
-                    return lm.apply_labels_to_frame(tb, var1, var2)
+                    return lm.apply_labels_to_frame(tb, var1, var2, fmt=label_fmt)
                 if lm:
-                    return lm.apply_labels_to_frame(tb, var1)
+                    return lm.apply_labels_to_frame(tb, var1, fmt=label_fmt)
                 return tb
 
             # Frekvenstabell: rowpct, colpct, cellpct, chi2
@@ -4306,30 +4875,14 @@ class StatsEngine:
             elif 'colpct' in options: normalize = 'columns'
             elif 'cellpct' in options: normalize = 'all'
 
-            # T5: avsløringskontroll — stopp tabeller med for mange små celler.
-            # Sjekk på RÅ tellinger, uavhengig av om bruker vil ha prosenter.
-            if _is_disclosure_control():
-                if var2:
-                    _raw_counts = pd.crosstab(df[var1], df[var2], dropna=dropna)
-                else:
-                    _raw_counts = df[var1].value_counts(dropna=not dropna)
-                _flat = _raw_counts.values.flatten() if hasattr(_raw_counts, 'values') else _raw_counts.to_numpy().flatten()
-                _total_cells = len(_flat)
-                if _total_cells > 0:
-                    _low_cells = int((_flat < _DC_TABULATE_LOW_CELL).sum())
-                    _low_ratio = _low_cells / _total_cells
-                    if _low_ratio > _DC_TABULATE_LOW_RATIO:
-                        raise ValueError(
-                            f"Tabellen kan ikke vises pga. for mange små celler "
-                            f"({_low_cells} av {_total_cells} celler har frekvens "
-                            f"<{_DC_TABULATE_LOW_CELL}, dvs. {_low_ratio*100:.0f}% — "
-                            f"grensen er {int(_DC_TABULATE_LOW_RATIO*100)}%). "
-                            f"Reduser antall kategorier eller utvid populasjonen."
-                        )
+            # T5: avsløringskontroll — stopp frekvenstabeller med for mange små celler.
+            _t5_small_cell_check()
 
             if var2:
                 ct = pd.crosstab(df[var1], df[var2], normalize=normalize, dropna=dropna,
                                  margins=True, margins_name='Total')
+                # rowsort() / colsort() — kjøres FØR chi2 (chi2 caster til string)
+                ct = _sort_tab_frame(ct, options)
                 if 'chi2' in options:
                     from scipy.stats import chi2_contingency
                     ct_raw = pd.crosstab(df[var1], df[var2], dropna=dropna)
@@ -4346,10 +4899,10 @@ class StatsEngine:
                     if 'Total' in ct_data.columns:
                         ct_data = ct_data.drop(columns='Total')
                     if 'top' in options:
-                        n = int(options.get('top', 10))
+                        n = _parse_count_option(options.get('top'))
                         ct_data = ct_data.head(n)
                     else:
-                        n = int(options.get('bottom', 10))
+                        n = _parse_count_option(options.get('bottom'))
                         ct_data = ct_data.tail(n)
                     # Legg tilbake Total-kolonne og -rad
                     if total_col is not None:
@@ -4365,21 +4918,23 @@ class StatsEngine:
                     ct = ct.reset_index()
                 lm = options.get('_label_manager')
                 if lm:
-                    ct = lm.apply_labels_to_frame(ct, var1, var2)
+                    ct = lm.apply_labels_to_frame(ct, var1, var2, fmt=label_fmt)
                 return ct
             else:
                 vc = df[var1].value_counts(normalize=normalize, dropna=not dropna)
                 total = vc.sum()
+                # rowsort() / colsort() FØR top/bottom og før Total legges til
+                vc = _sort_tab_series(vc, options)
                 if 'top' in options:
-                    n = int(options.get('top', 10))
+                    n = _parse_count_option(options.get('top'))
                     vc = vc.head(n)
                 elif 'bottom' in options:
-                    n = int(options.get('bottom', 10))
+                    n = _parse_count_option(options.get('bottom'))
                     vc = vc.tail(n)
                 vc = pd.concat([vc, pd.Series([total], index=['Total'])])
                 lm = options.get('_label_manager')
                 if lm:
-                    vc = lm.apply_labels_to_series(vc, var1)
+                    vc = lm.apply_labels_to_series(vc, var1, fmt=label_fmt)
                 return vc
 
         if cmd == 'tabulate-panel':
@@ -4442,18 +4997,36 @@ class RegressionHandler:
         return sm.add_constant(X) if add else X
 
     def _apply_cov(self, model, options, df_clean=None):
-        """Bruk robust eller cluster standardfeil."""
-        if options.get('cluster') and df_clean is not None:
+        """Bruk robust eller cluster standardfeil.
+
+        Feiler høyt: brukeren har eksplisitt bedt om robuste/clustrede
+        standardfeil — å stille returnere vanlige SE-er gir et resultat som
+        ser riktig ut, men ikke er det brukeren ba om."""
+        if options.get('cluster'):
             cov = options['cluster']
+            if df_clean is None:
+                raise ValueError(
+                    f"cluster({cov}) støttes ikke for denne kommandoen."
+                )
+            if cov not in df_clean.columns:
+                raise ValueError(
+                    f"cluster({cov}): variabelen '{cov}' finnes ikke i datasettet."
+                )
             try:
                 return model.get_robustcov_results(cov_type='cluster', groups=df_clean[cov].values)
-            except Exception:
-                return model
+            except Exception as e:
+                raise ValueError(
+                    f"cluster({cov}): kunne ikke beregne cluster-standardfeil "
+                    f"({type(e).__name__}: {e})."
+                )
         if options.get('robust'):
             try:
                 return model.get_robustcov_results(cov_type='HC1')
-            except Exception:
-                return model
+            except Exception as e:
+                raise ValueError(
+                    f"robust: kunne ikke beregne robuste standardfeil "
+                    f"({type(e).__name__}: {e})."
+                )
         return model
 
     def _panel_predict_extra(self, model, Y, X, panel_df, key_col, df_clean, options, alpha, model_type, g=None, Y_orig=None, X_orig=None):
@@ -4505,6 +5078,89 @@ class RegressionHandler:
         summary = str(model.summary(alpha=alpha)) if hasattr(model, 'summary') else str(model)
         return (summary, extra)
 
+    def _expand_factor_design(self, raw_indep, df):
+        """Stata-stil faktor-/interaksjonssyntaks for regresjon.
+
+        Tolker hvert ledd i variabellista:
+          VAR    → kontinuerlig (lineært ledd)
+          c.VAR  → tving kontinuerlig
+          i.VAR  → dummyer (referansekategori droppes, drop_first)
+          A#B    → interaksjon (kun produktleddet)
+          A##B   → full kryssing (hovedeffekter + interaksjon)
+        Innenfor # er bare navn KATEGORISKE (som Stata); c.-prefiks tvinger
+        kontinuerlig. Kryssing av faktorer gir produkt av alle ikke-referanse-
+        dummyer. Bare navn UTENFOR # er kontinuerlig (bakoverkompatibelt — bruk
+        i. for dummyer).
+
+        Returnerer (indep_vars, computed, cont_bases):
+          indep_vars – ordnet liste over sluttkolonner i designmatrisen
+          computed   – {kolonnenavn: Series} for genererte kolonner (dummyer,
+                       c.-ledd, interaksjoner), indeksert som df
+          cont_bases – basis-kontinuerlige kolonner som hentes direkte fra df
+        """
+        import itertools
+
+        indep_vars = []
+        computed = {}
+        cont_bases = []
+
+        def _dummies(base):
+            if base not in df.columns:
+                raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
+            d = pd.get_dummies(df[base], prefix=base, drop_first=True)
+            return [(c, d[c].astype(float)) for c in d.columns]
+
+        def _numeric(base):
+            if base not in df.columns:
+                raise ValueError(f"Variabel '{base}' finnes ikke i datasettet")
+            return pd.to_numeric(df[base], errors='coerce')
+
+        def _operand_cols(tok):
+            # Kolonner for ett interaksjons-ledd: liste av (navn, Series).
+            if tok.startswith('c.'):
+                base = tok[2:]
+                return [(base, _numeric(base))]
+            base = tok[2:] if tok.startswith('i.') else tok
+            return _dummies(base)  # bare navn i # = kategorisk (Stata-default)
+
+        def _add_main(name, series):
+            if series is None:
+                if name not in cont_bases:
+                    cont_bases.append(name)
+            else:
+                computed[name] = series
+            if name not in indep_vars:
+                indep_vars.append(name)
+
+        for tok in raw_indep:
+            if '#' in tok:
+                full_cross = '##' in tok
+                operands = tok.replace('##', '#').split('#')
+                expanded = [_operand_cols(op) for op in operands]
+                if full_cross:
+                    for cols in expanded:
+                        for name, series in cols:
+                            _add_main(name, series)
+                for combo in itertools.product(*expanded):
+                    inter_name = '#'.join(c[0] for c in combo)
+                    series = None
+                    for _, cs in combo:
+                        series = cs if series is None else series * cs
+                    computed[inter_name] = series
+                    if inter_name not in indep_vars:
+                        indep_vars.append(inter_name)
+            elif tok.startswith('c.'):
+                _add_main(tok[2:], None)        # kontinuerlig passthrough
+            elif tok.startswith('i.'):
+                for name, series in _dummies(tok[2:]):
+                    computed[name] = series
+                    if name not in indep_vars:
+                        indep_vars.append(name)
+            else:
+                _add_main(tok, None)            # bare utenfor # = kontinuerlig
+
+        return indep_vars, computed, cont_bases
+
     def _fit_simple(self, reg_cmd, df, args, options):
         """Fit en enkel regresjon og returner (model, dep_var, indep_vars, df_clean).
         Brukes av coefplot og evt. andre metoder som trenger råmodellen.
@@ -4514,45 +5170,23 @@ class RegressionHandler:
         raw_indep = list(args[1:])
         add_const = 'noconstant' not in options
 
-        # i. prefix → dummies
-        factor_map = {}
-        for v in raw_indep:
-            if v.startswith('i.'):
-                base = v[2:]
-                if base not in df.columns:
-                    raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
-                dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-                factor_map[v] = list(dummies.columns)
-
-        indep_vars = []
-        for v in raw_indep:
-            if v in factor_map:
-                indep_vars.extend(factor_map[v])
-            else:
-                indep_vars.append(v)
-
-        cont_vars = [dep_var] + [v for v in indep_vars if v not in
-                                  [c for cols in factor_map.values() for c in cols]]
+        # Faktor-/interaksjonssyntaks (i. c. # ##) → designkolonner
+        indep_vars, _computed, _cont_bases = self._expand_factor_design(raw_indep, df)
+        cont_vars = [dep_var] + [b for b in _cont_bases if b != dep_var]
         missing = [v for v in cont_vars if v not in df.columns]
         if missing:
             raise ValueError(f"Variabler ikke funnet: {missing}")
-        df_work = df[cont_vars].copy()
+        df_work = df[list(dict.fromkeys(cont_vars))].copy()
         for v in cont_vars:
             df_work[v] = pd.to_numeric(df_work[v], errors='coerce')
-        for iv, dummy_cols in factor_map.items():
-            base = iv[2:]
-            dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-            for col in dummy_cols:
-                df_work[col] = dummies[col].astype(float)
+        for name, series in _computed.items():
+            df_work[name] = pd.to_numeric(series.reindex(df_work.index), errors='coerce')
 
         df_clean = df_work.dropna().copy()
         if df_clean.empty:
             raise ValueError("Ingen observasjoner etter konvertering.")
-        for v in cont_vars:
-            df_clean[v] = df_clean[v].astype(np.float64)
-        for cols in factor_map.values():
-            for col in cols:
-                df_clean[col] = df_clean[col].astype(np.float64)
+        for col in [dep_var] + indep_vars:
+            df_clean[col] = df_clean[col].astype(np.float64)
 
         if options.get('standardize'):
             for v in indep_vars:
@@ -4590,57 +5224,33 @@ class RegressionHandler:
         add_const = 'noconstant' not in options
         alpha = 1 - (float(options.get('level', 95)) / 100)
 
-        # ── Stata-stil i.VARNAME: lag dummies for kategoriske variabler ──────
-        # i.kjønn → dummy-kolonner kjønn_<kategori2>, kjønn_<kategori3>, …
-        # Referansekategori (lavest sortert) droppes automatisk (drop_first=True).
-        factor_map = {}  # 'i.xxx' -> [dummy_col1, dummy_col2, ...]
-        for v in raw_indep:
-            if v.startswith('i.'):
-                base = v[2:]
-                if base not in df.columns:
-                    raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
-                dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-                factor_map[v] = list(dummies.columns)
+        # ── Stata-stil faktor-/interaksjonssyntaks (i. c. # ##) ──────────────
+        # i.kjønn → dummyer; c.alder → kontinuerlig; a#b → interaksjon;
+        # a##b → full kryssing. Referansekategori droppes (drop_first=True).
+        indep_vars, _computed_cols, _cont_bases = self._expand_factor_design(raw_indep, df)
 
-        # Utvidet indep_vars: i.xxx erstattes med sine dummy-kolonnenavn
-        indep_vars = []
-        for v in raw_indep:
-            if v in factor_map:
-                indep_vars.extend(factor_map[v])
-            else:
-                indep_vars.append(v)
-
-        # Kontinuerlige variabler som må konverteres numerisk
-        cont_vars = [dep_var] + [v for v in indep_vars if v not in
-                                  [col for cols in factor_map.values() for col in cols]]
+        # Kontinuerlige basisvariabler (+ evt. cluster) som hentes fra df
+        cont_vars = [dep_var] + [b for b in _cont_bases if b != dep_var]
         if options.get('cluster') and options['cluster'] not in cont_vars:
             cont_vars.append(options['cluster'])
 
-        # Bygg arbeidsdf: numeriske kontinuerlige kolonner
         missing = [v for v in cont_vars if v not in df.columns]
         if missing:
             raise ValueError(f"Variabler ikke funnet i datasettet: {missing}")
-        df_work = df[cont_vars].copy()
+        df_work = df[list(dict.fromkeys(cont_vars))].copy()
         for v in cont_vars:
             df_work[v] = pd.to_numeric(df_work[v], errors='coerce')
-
-        # Legg til dummy-kolonner (allerede float/bool fra get_dummies)
-        for iv, dummy_cols in factor_map.items():
-            base = iv[2:]
-            dummies = pd.get_dummies(df[base], prefix=base, drop_first=True)
-            for col in dummy_cols:
-                df_work[col] = dummies[col].astype(float)
+        # Genererte kolonner (dummyer, c.-ledd, interaksjoner)
+        for name, series in _computed_cols.items():
+            df_work[name] = pd.to_numeric(series.reindex(df_work.index), errors='coerce')
 
         df_clean = df_work.dropna().copy()
         if df_clean.empty:
             raise ValueError(
                 "Ingen observasjoner etter numerisk konvertering — sjekk at avhengig og uavhengige variabler er tall."
             )
-        for v in cont_vars:
-            df_clean[v] = df_clean[v].astype(np.float64)
-        for cols in factor_map.values():
-            for col in cols:
-                df_clean[col] = df_clean[col].astype(np.float64)
+        for col in [dep_var] + indep_vars:
+            df_clean[col] = df_clean[col].astype(np.float64)
 
         vars_needed = [dep_var] + indep_vars  # brukes av regress-panel m.fl.
         Y = df_clean[dep_var]
@@ -4673,6 +5283,45 @@ class RegressionHandler:
                 coef = np.exp(model.params)
                 conf = np.exp(model.conf_int(alpha=alpha))
                 out = f"\nModell: poisson (incidence rate ratios)\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
+                return (out, None)
+            return (str(model.summary(alpha=alpha)), None)
+
+        if cmd in ('negative-binomial', 'negative-binomial-predict'):
+            # MLE-estimering av dispersjon (alpha); passer telledata med
+            # overdispersjon (varians > forventning), jf. poisson ellers.
+            from statsmodels.discrete.discrete_model import NegativeBinomial as _NB
+            Y_nb, X_nb, _idx = Y, X, df_clean.index
+            _fit_kw = {}
+            _expo = options.get('exposure')
+            if _expo:
+                if _expo not in df.columns:
+                    raise ValueError(f"exposure-variabel '{_expo}' finnes ikke i datasettet")
+                _ev = pd.to_numeric(df.loc[_idx, _expo], errors='coerce')
+                _keep = _ev.notna() & (_ev > 0)
+                if not bool(_keep.all()):
+                    Y_nb, X_nb, _ev, _idx = Y_nb[_keep], X_nb[_keep], _ev[_keep], _idx[_keep]
+                _fit_kw['exposure'] = _ev.astype(float).values
+            model = _NB(Y_nb, X_nb, **_fit_kw).fit(disp=0)
+            model = self._apply_cov(model, options, df_clean.loc[_idx])
+
+            if cmd == 'negative-binomial-predict':
+                extra = {}
+                pred_name = options.get('predicted', 'predicted')
+                res_name = options.get('residuals')
+                fitted = pd.Series(np.asarray(model.predict()), index=_idx)
+                if pred_name:
+                    extra[str(pred_name) if pred_name is not True else 'predicted'] = fitted
+                if res_name:
+                    extra[str(res_name) if res_name is not True else 'residuals'] = pd.Series(
+                        Y_nb.values - fitted.values, index=_idx)
+                if not extra:
+                    extra['predicted'] = fitted
+                return (str(model.summary(alpha=alpha)), extra)
+
+            if options.get('irr'):
+                coef = np.exp(model.params)
+                conf = np.exp(model.conf_int(alpha=alpha))
+                out = f"\nModell: negative-binomial (incidence rate ratios)\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
                 return (out, None)
             return (str(model.summary(alpha=alpha)), None)
 
@@ -4985,7 +5634,23 @@ class RegressionHandler:
         predicted_vals = X_actual @ model_2s.params
         resid_vals = Y - predicted_vals
 
-        method = args.get('method', '2sls').upper()
+        # Korrekte 2SLS-standardfeil: residualvariansen må beregnes med de
+        # FAKTISKE endogene verdiene (resid_vals), ikke trinn-2-residualene
+        # (Y - X̂b). 'fixed scale' setter cov = scale * (X2'X2)^-1, som er
+        # nettopp 2SLS-kovariansen med riktig sigma².
+        _sigma2_2sls = float(resid_vals @ resid_vals) / model_2s.df_resid
+        model_2s = model_2s.get_robustcov_results(
+            cov_type='fixed scale', scale=_sigma2_2sls
+        )
+
+        # Estimator: docs-form etterstilt opsjon (, tsls/liml/gmm) har forrang,
+        # ellers posisjonelt token i var-lista, ellers tsls (standard).
+        method = args.get('method') or 'tsls'
+        for _m in ('tsls', 'liml', 'gmm', '2sls'):
+            if options.get(_m):
+                method = _m
+                break
+        method = method.upper()
         header = f"\nInstrumentvariabelregresjon ({method})\n"
         header += "\n".join(first_stage_lines) + "\n\n"
         header += f"Andre trinn (avhengig: {dep}):\n"
@@ -5220,24 +5885,23 @@ class SurvivalHandler:
             return (f"cox krever hendelse-var og tid-var.", None)
         event_var, duration_var = args[0], args[1]
         raw_covars = list(args[2:])
-        # i.VARNAME → dummies (Stata-stil)
-        factor_dummies = {}
+        if event_var not in df.columns or duration_var not in df.columns:
+            return (f"cox: variabler {event_var} eller {duration_var} finnes ikke.", None)
+        # i.VARNAME → dummies (Stata-stil). Bygges i en LOKAL arbeidsramme —
+        # forskerens datasett skal ikke få dummy-kolonner som bivirkning.
+        work_parts = [df[[event_var, duration_var]]]
         covars = []
         for v in raw_covars:
             if v.startswith('i.'):
                 base = v[2:]
                 if base in df.columns:
                     dummies = pd.get_dummies(df[base], prefix=base, drop_first=True).astype(float)
-                    for col in dummies.columns:
-                        df[col] = dummies[col]
-                    factor_dummies[v] = list(dummies.columns)
+                    work_parts.append(dummies)
                     covars.extend(dummies.columns)
             elif v in df.columns:
+                work_parts.append(df[[v]])
                 covars.append(v)
-        if event_var not in df.columns or duration_var not in df.columns:
-            return (f"cox: variabler {event_var} eller {duration_var} finnes ikke.", None)
-        cols = [event_var, duration_var] + list(covars)
-        sub = df[cols].dropna(how='any')
+        sub = pd.concat(work_parts, axis=1).dropna(how='any')
         sub = sub[sub[duration_var] > 0]
         if sub.empty or len(sub) < 3:
             return ("cox: for få observasjoner etter dropna (varighet må være > 0).", None)
@@ -5340,12 +6004,12 @@ class SurvivalHandler:
                     waf = WeibullAFTFitter(alpha=alpha)
                     waf.fit(sub, duration_col=duration_var, event_col=event_var)
                     times = np.linspace(sub[duration_var].min(), sub[duration_var].max(), 100)
-                    pred = waf.predict_survival_function(sub, times=times)
-                    if hasattr(pred, 'mean'):
-                        s = pred.mean(axis=1)
-                    else:
-                        s = pred.iloc[:, 0] if hasattr(pred, 'iloc') else pred
-                    fig.add_trace(go.Scatter(x=times, y=s.values if hasattr(s, 'values') else s, mode='lines', name=str(lbl)))
+                    # Modellen har ingen kovariater — alle rader gir identisk
+                    # kurve. Prediker for ÉN rad (N kurver à 100 punkter ville
+                    # allokert hundrevis av MB i nettleseren).
+                    pred = waf.predict_survival_function(sub.iloc[[0]], times=times)
+                    s = pred.iloc[:, 0]
+                    fig.add_trace(go.Scatter(x=times, y=s.values, mode='lines', name=str(lbl)))
                     # Hent nøkkelparametre
                     row = {'Gruppe': lbl, 'N': len(sub), 'Hendelser': int(sub[event_var].sum())}
                     if hasattr(waf, 'lambda_') and hasattr(waf, 'rho_'):
@@ -5369,8 +6033,9 @@ class SurvivalHandler:
                 waf = WeibullAFTFitter(alpha=alpha)
                 waf.fit(sub, duration_col=duration_var, event_col=event_var)
                 times = np.linspace(sub[duration_var].min(), sub[duration_var].max(), 100)
-                pred = waf.predict_survival_function(sub, times=times)
-                s = pred.mean(axis=1) if hasattr(pred, 'mean') else pred.iloc[:, 0]
+                # Én rad er nok — ingen kovariater, alle kurver identiske.
+                pred = waf.predict_survival_function(sub.iloc[[0]], times=times)
+                s = pred.iloc[:, 0]
                 fig = go.Figure(data=[go.Scatter(x=times, y=s.values, mode='lines', name='S(t)')])
                 if hasattr(waf, 'summary'):
                     summaries = [waf.summary.T]
@@ -5678,11 +6343,12 @@ class PlotHandler:
                         if not subset.empty:
                             fig.add_trace(go.Box(y=subset, name=str(label)))
                 else:
-                    _df_b = df.copy()
+                    # Kopier bare kolonnene som trengs — ikke hele datasettet
+                    _df_b = df[[over_var, var]].copy()
                     _df_b[var] = _wcol(df[var])
                     fig = px.box(_df_b, x=over_var, y=var)
             else:
-                _df_b = df.copy()
+                _df_b = df[[var]].copy()
                 _df_b[var] = _wcol(df[var])
                 fig = px.box(_df_b, y=var)
             fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=60),
@@ -5879,6 +6545,32 @@ class PlotHandler:
         return fig
 
 
+# Kommandoer der en 'if'-betingelse filtrerer radene FØR kommandoen kjører.
+# Listen følger microdata.no-manualen (kommandoer dokumentert med [if]):
+# https://microdata.no/manual/kommandoer_og_funksjoner/kommandoer
+# I tillegg: sample, ci, collapse og scatter (emulator-utvidelser).
+# NB: generate/replace/recode/keep/drop håndterer 'if' selv (maskerer rader,
+# filtrerer ikke datasettet) og skal IKKE stå her.
+_COND_FILTER_COMMANDS = frozenset([
+    # Analyse
+    'anova', 'ci', 'correlate', 'normaltest', 'transitions-panel',
+    'summarize', 'summarize-panel', 'tabulate', 'tabulate-panel',
+    'sample', 'collapse',
+    # Grafikk
+    'barchart', 'boxplot', 'coefplot', 'hexbin', 'histogram',
+    'piechart', 'sankey', 'scatter',
+    # Regresjon
+    'hausman', 'ivregress', 'ivregress-predict',
+    'logit', 'logit-predict', 'mlogit', 'mlogit-predict',
+    'negative-binomial', 'negative-binomial-predict',
+    'poisson', 'poisson-predict', 'probit', 'probit-predict',
+    'rdd', 'regress', 'regress-panel', 'regress-panel-diff',
+    'regress-panel-predict', 'regress-predict',
+    # Overlevelsesanalyse
+    'cox', 'kaplan-meier', 'kaplan_meier', 'weibull',
+])
+
+
 class MicroInterpreter:
     def __init__(self, metadata_path=None, catalog=None, echo_commands: bool = True, metadata_base_url=None):
         self.datasets = {}
@@ -5887,6 +6579,11 @@ class MicroInterpreter:
         self.active_name = None
         self.parser = MicroParser()
         self.data_engine = MockDataEngine(metadata_path=metadata_path, catalog=catalog)
+        # Statisk datakilde (settes av appen når data-source=static). None => generer.
+        self.static_source = None
+        # Kolonner som er konvertert til tall via destring — overstyrer
+        # alfanumerisk-sjekken (metadata sier streng, men brukeren har destringet).
+        self._numeric_override_cols = set()
         if metadata_base_url:
             u = str(metadata_base_url).strip()
             self.data_engine._page_base_url = u if u.endswith('/') else (u + '/')
@@ -5913,7 +6610,7 @@ class MicroInterpreter:
         pd.options.display.float_format = lambda x: _smart_float_fmt(x, dec)
 
     # ─── Script-direktiver (// m2py: key=value) ─────────────────────────────
-    # Brukes for å overstyre avsløringskontroll per script. Direktivene leses
+    # Brukes for å overstyre globale innstillinger per script. Direktivene leses
     # før scriptet kjøres og restaureres etterpå, slik at f.eks. en API-konsument
     # kan kjøre to scripts på rad uten at det ene "lekker" innstilling til neste.
     _DIRECTIVE_RE = re.compile(
@@ -5922,8 +6619,25 @@ class MicroInterpreter:
     _DIRECTIVE_TRUTHY = ('on', 'true', '1', 'yes', 'pa', 'på')
     _DIRECTIVE_FALSY  = ('off', 'false', '0', 'no', 'av')
 
+    # Direktiv-aliaser → (storage_kind, storage_key)
+    # storage_kind='global' → muterer modul-global (legacy: disclosure-control)
+    # storage_kind='default' → muterer M2PY_DEFAULTS[key]
+    _DIRECTIVE_TARGETS = {
+        'disclosure-control': ('global', 'M2PY_DISCLOSURE_CONTROL'),
+        'disclosurecontrol':  ('global', 'M2PY_DISCLOSURE_CONTROL'),
+        'dc':                 ('global', 'M2PY_DISCLOSURE_CONTROL'),
+        'label-format':       ('default', 'label_format'),
+        'labelformat':        ('default', 'label_format'),
+        'data-source':        ('global_str', 'M2PY_DATA_SOURCE'),
+        'datasource':         ('global_str', 'M2PY_DATA_SOURCE'),
+    }
+    _DIRECTIVE_ENUM_VALUES = {
+        'label_format': ('both', 'label', 'code'),
+        'M2PY_DATA_SOURCE': ('dynamic', 'static'),
+    }
+
     def _apply_script_directives(self, script_text):
-        """Skann scriptet etter // m2py: <key>=<value>-linjer og mut globalen
+        """Skann scriptet etter // m2py: <key>=<value>-linjer og mut innstillinger
         deretter. Returner dict med opprinnelige verdier som skal gjenopprettes."""
         saved = {}
         for raw in script_text.splitlines():
@@ -5932,33 +6646,78 @@ class MicroInterpreter:
                 continue
             key = m.group(1).lower()
             val = m.group(2).lower().strip(';,')
-            if key in ('disclosure-control', 'disclosurecontrol', 'dc'):
-                global_name = 'M2PY_DISCLOSURE_CONTROL'
-            else:
-                # Ukjent direktiv — logg en advarsel og hopp over
+            target = self._DIRECTIVE_TARGETS.get(key)
+            if target is None:
                 self._log(f"// m2py: ukjent direktiv '{key}' — ignorert")
                 continue
-            new_val = (
-                '1' if val in self._DIRECTIVE_TRUTHY else
-                '0' if val in self._DIRECTIVE_FALSY else None
-            )
-            if new_val is None:
-                self._log(f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)")
-                continue
-            if global_name not in saved:
-                saved[global_name] = globals().get(global_name, '1')
-            globals()[global_name] = new_val
-            self._log(
-                f"// m2py: disclosure-control = "
-                f"{'PÅ' if new_val == '1' else 'AV'} (satt fra script-direktiv)"
-            )
+            kind, storage_key = target
+            if kind == 'global':
+                # Truthy/falsy → '1'/'0' (kun disclosure-control bruker dette)
+                new_val = (
+                    '1' if val in self._DIRECTIVE_TRUTHY else
+                    '0' if val in self._DIRECTIVE_FALSY else None
+                )
+                if new_val is None:
+                    self._log(f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)")
+                    continue
+                saved_key = ('global', storage_key)
+                if saved_key not in saved:
+                    saved[saved_key] = globals().get(storage_key, '0')
+                globals()[storage_key] = new_val
+                self._log(
+                    f"// m2py: {key} = "
+                    f"{'PÅ' if new_val == '1' else 'AV'} (satt fra script-direktiv)"
+                )
+            elif kind == 'global_str':
+                allowed = self._DIRECTIVE_ENUM_VALUES.get(storage_key)
+                if allowed and val not in allowed:
+                    self._log(
+                        f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert "
+                        f"(tillatt: {', '.join(allowed)})"
+                    )
+                    continue
+                saved_key = ('global', storage_key)
+                if saved_key not in saved:
+                    saved[saved_key] = globals().get(storage_key, (allowed[0] if allowed else None))
+                globals()[storage_key] = val
+                self._log(f"// m2py: {key} = {val} (satt fra script-direktiv)")
+            elif kind == 'default':
+                allowed = self._DIRECTIVE_ENUM_VALUES.get(storage_key)
+                if allowed and val not in allowed:
+                    self._log(
+                        f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert "
+                        f"(tillatt: {', '.join(allowed)})"
+                    )
+                    continue
+                d = globals().get('M2PY_DEFAULTS')
+                if not isinstance(d, dict):
+                    d = {}
+                    globals()['M2PY_DEFAULTS'] = d
+                saved_key = ('default', storage_key)
+                if saved_key not in saved:
+                    saved[saved_key] = d.get(storage_key, _M2PY_HARDCODED_FALLBACKS.get(storage_key))
+                d[storage_key] = val
+                self._log(f"// m2py: {key} = {val} (satt fra script-direktiv)")
         return saved
 
     def _restore_script_directives(self, saved):
-        """Gjenopprett globaler etter at scriptet er ferdig (uansett om det
+        """Gjenopprett innstillinger etter at scriptet er ferdig (uansett om det
         feilet eller fullførte)."""
-        for key, old_val in saved.items():
-            globals()[key] = old_val
+        for storage_ref, old_val in saved.items():
+            # Bakoverkompatibilitet: gamle saved-dict-er brukte rene strenger som nøkler
+            if isinstance(storage_ref, tuple) and len(storage_ref) == 2:
+                kind, storage_key = storage_ref
+                if kind == 'global':
+                    globals()[storage_key] = old_val
+                elif kind == 'default':
+                    d = globals().get('M2PY_DEFAULTS')
+                    if isinstance(d, dict):
+                        if old_val is None:
+                            d.pop(storage_key, None)
+                        else:
+                            d[storage_key] = old_val
+            else:
+                globals()[storage_ref] = old_val
 
     # ─── Streng-emulering: metadata-oppslag for kolonner ────────────────────
     def _lookup_var_meta(self, colname):
@@ -5996,7 +6755,10 @@ class MicroInterpreter:
         return _meta_is_pseudonym(meta, registry_name=reg)
 
     def _is_string_col(self, colname):
-        """True hvis kolonnen er deklarert som alfanumerisk i metadata."""
+        """True hvis kolonnen er deklarert som alfanumerisk i metadata.
+        Kolonner som er destringet til tall regnes som numeriske (overstyrer)."""
+        if colname in getattr(self, '_numeric_override_cols', ()):
+            return False
         meta = self._lookup_var_meta(colname)
         return _meta_is_string_type(meta)
 
@@ -6052,40 +6814,43 @@ class MicroInterpreter:
         # Unntak: 0 eller alle rader endret = OK
         if n_affected == 0 or n_affected == n_total:
             return
+        _min_affected = _dc_threshold('dc_min_affected')
         # Forbudt: 1-9 endret
-        if 0 < n_affected < _DC_MIN_AFFECTED:
+        if 0 < n_affected < _min_affected:
             raise ValueError(
                 f"{cmd} '{target_name}' påvirker bare {n_affected} av {n_total} enheter. "
                 f"microdata.no tillater ikke endringer som påvirker færre enn "
-                f"{_DC_MIN_AFFECTED} enheter (unntak: alle eller ingen)."
+                f"{_min_affected} enheter (unntak: alle eller ingen)."
             )
         # Forbudt: alle bortsett fra <10 (dvs. n - affected ∈ 1..9)
         n_unchanged = n_total - n_affected
-        if 0 < n_unchanged < _DC_MIN_AFFECTED:
+        if 0 < n_unchanged < _min_affected:
             raise ValueError(
                 f"{cmd} '{target_name}' lar bare {n_unchanged} av {n_total} enheter være "
                 f"uendret. microdata.no tillater ikke endringer som påvirker alle bortsett "
-                f"fra færre enn {_DC_MIN_AFFECTED} enheter."
+                f"fra færre enn {_min_affected} enheter."
             )
 
     def _check_t1_population(self, n, context):
-        """T1: avvis hvis populasjonen er <1000 enheter."""
+        """T1: avvis hvis populasjonen er under terskelen (standard 1000)."""
         if not _is_disclosure_control():
             return
-        if n < _DC_MIN_POPULATION:
+        _min_pop = _dc_threshold('dc_min_population')
+        if n < _min_pop:
             raise ValueError(
                 f"Populasjonen er {n} enheter ({context}). microdata.no tillater ikke "
-                f"populasjoner med færre enn {_DC_MIN_POPULATION} enheter."
+                f"populasjoner med færre enn {_min_pop} enheter."
             )
 
     def _check_t7_summarize_pop(self, n, cmd):
-        """T7: avvis deskriptiv statistikk på populasjoner <10."""
+        """T7: avvis deskriptiv statistikk på for små populasjoner (standard 10)."""
         if not _is_disclosure_control():
             return
-        if n < _DC_MIN_SUMMARIZE:
+        _min_pop = _dc_threshold('dc_min_summarize')
+        if n < _min_pop:
             raise ValueError(
                 f"Populasjonen er {n} enheter. microdata.no krever minst "
-                f"{_DC_MIN_SUMMARIZE} enheter for deskriptiv statistikk ({cmd}). "
+                f"{_min_pop} enheter for deskriptiv statistikk ({cmd}). "
                 f"Unntak: ren count/sum er tillatt."
             )
 
@@ -6102,6 +6867,7 @@ class MicroInterpreter:
         # Kommandoer som er rene analyser (krever ikke-pseudonym variabler)
         _ANALYSIS_CMDS = {'summarize', 'correlate', 'ci', 'anova', 'normaltest',
                           'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                          'negative-binomial', 'negative-binomial-predict',
                           'regress-panel', 'ivregress'}
 
         def _maybe_check_pseudonym(varname):
@@ -6320,33 +7086,45 @@ class MicroInterpreter:
                 return None
         resolved, aux = self._resolve_condition_value(var, value, df, self.label_manager)
         col = df[var]
-        # Sammenligning som fungerer for både numerisk og object
+
+        def _is_stringy(c):
+            # object (pandas 2 / Pyodide) eller str-dtype (pandas 3)
+            return pd.api.types.is_object_dtype(c) or pd.api.types.is_string_dtype(c)
+
+        def _candidate_strings():
+            # Strengvarianter av verdien: primær + kodeformer (f.eks. '301' og '0301')
+            cands = [str(resolved)]
+            for key in ('str_code', 'int_code'):
+                if key in aux and str(aux[key]) not in cands:
+                    cands.append(str(aux[key]))
+            return cands
+
+        # Sammenligning som fungerer for både numerisk og object/str
         try:
             if op == '==':
                 # Først: direkte sammenligning
                 mask = (col == resolved)
-                # Hvis ingen treff og kolonnen er object/str, prøv streng-varianter
-                if not mask.any() and pd.api.types.is_object_dtype(col):
-                    candidates = [str(resolved)]
-                    if 'str_code' in aux:
-                        candidates.append(str(aux['str_code']))
-                    if 'int_code' in aux:
-                        candidates.append(str(aux['int_code']))
-                    for cand in candidates:
-                        m2 = (col.astype(str) == cand)
+                # Hvis ingen treff og kolonnen er streng-aktig, prøv kandidatene
+                if not mask.any() and _is_stringy(col):
+                    s = col.astype(str)
+                    for cand in _candidate_strings():
+                        m2 = (s == cand)
                         if m2.any():
                             mask = m2
                             break
             elif op == '!=':
-                if pd.api.types.is_object_dtype(col):
-                    # Ulikhet: bruk samme kandidatlogikk som for likhet
-                    candidates = [str(resolved)]
-                    if 'str_code' in aux:
-                        candidates.append(str(aux['str_code']))
-                    if 'int_code' in aux:
-                        candidates.append(str(aux['int_code']))
-                    # Start med primærverdi
-                    mask = (col.astype(str) != candidates[0])
+                if _is_stringy(col):
+                    # Ulikhet: finn kandidaten som faktisk treffer (samme logikk
+                    # som ==) og negér den — ellers blir f.eks.
+                    # "kommune != '0301'" sann for alle rader.
+                    s = col.astype(str)
+                    candidates = _candidate_strings()
+                    mask = (s != candidates[0])
+                    for cand in candidates:
+                        eq = (s == cand)
+                        if eq.any():
+                            mask = ~eq
+                            break
                 else:
                     mask = (col != resolved)
             elif op in ('<', '>', '<=', '>='):
@@ -6582,13 +7360,38 @@ class MicroInterpreter:
             if cmd == 'for' and isinstance(args, dict) and 'levels' in args:
                 body_lines = []
                 j = i + 1
+                nested_for = False
                 while j < len(lines):
                     sub_line = self._substitute_bindings(lines[j])
                     sub_instr = self.parser.parse_line(sub_line)
                     if sub_instr and sub_instr['command'] == 'end':
                         break
+                    if sub_instr and sub_instr['command'] == 'for':
+                        nested_for = True
+                        break
                     body_lines.append(lines[j])
                     j += 1
+                if nested_for:
+                    # microdata.no har ingen nøstede for...end-blokker — flere
+                    # nivåer skrives med `;` i én løkke (for i in 1:2; j in 3:4).
+                    # Avvis rent og hopp forbi HELE den ytre løkka (dybde-bevisst),
+                    # slik at kroppen ikke delkjøres.
+                    self._log(
+                        "FEIL: nøstede for...end-blokker støttes ikke i microdata.no. "
+                        "Bruk flere nivåer i én løkke med `;`, f.eks. "
+                        "`for i in 1:2; j in 3:4`."
+                    )
+                    depth = 1
+                    k = i + 1
+                    while k < len(lines) and depth > 0:
+                        ki = self.parser.parse_line(lines[k].strip())
+                        if ki and ki.get('command') == 'for':
+                            depth += 1
+                        elif ki and ki.get('command') == 'end':
+                            depth -= 1
+                        k += 1
+                    i = k
+                    continue
                 outer_bindings = dict(self.bindings)
                 try:
                     levels = args['levels']
@@ -6694,13 +7497,38 @@ class MicroInterpreter:
             if cmd == 'for' and isinstance(args, dict) and 'levels' in args:
                 body_lines = []
                 j = i + 1
+                nested_for = False
                 while j < len(lines):
                     sub_line = self._substitute_bindings(lines[j])
                     sub_instr = self.parser.parse_line(sub_line)
                     if sub_instr and sub_instr['command'] == 'end':
                         break
+                    if sub_instr and sub_instr['command'] == 'for':
+                        nested_for = True
+                        break
                     body_lines.append(lines[j])
                     j += 1
+                if nested_for:
+                    # microdata.no har ingen nøstede for...end-blokker — flere
+                    # nivåer skrives med `;` i én løkke (for i in 1:2; j in 3:4).
+                    # Avvis rent og hopp forbi HELE den ytre løkka (dybde-bevisst),
+                    # slik at kroppen ikke delkjøres.
+                    self._log(
+                        "FEIL: nøstede for...end-blokker støttes ikke i microdata.no. "
+                        "Bruk flere nivåer i én løkke med `;`, f.eks. "
+                        "`for i in 1:2; j in 3:4`."
+                    )
+                    depth = 1
+                    k = i + 1
+                    while k < len(lines) and depth > 0:
+                        ki = self.parser.parse_line(lines[k].strip())
+                        if ki and ki.get('command') == 'for':
+                            depth += 1
+                        elif ki and ki.get('command') == 'end':
+                            depth -= 1
+                        k += 1
+                    i = k
+                    continue
                 outer_bindings = dict(self.bindings)
                 try:
                     levels = args['levels']
@@ -6992,7 +7820,7 @@ class MicroInterpreter:
             lines.append(f'{comment} ' + ' '.join(str(v) for v in vars_list))
             lines.append(f"# statsmodels anova_lm(ols(...))")
             return lines
-        if cmd in ['regress', 'logit', 'probit', 'poisson', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'regress-panel-predict', 'regress-panel-diff', 'rdd']:
+        if cmd in ['regress', 'logit', 'probit', 'poisson', 'negative-binomial', 'negative-binomial-predict', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'regress-panel-predict', 'regress-panel-diff', 'rdd']:
             vars_list = args if isinstance(args, (list, tuple)) else (args.get('vars', []) if isinstance(args, dict) else [])
             lines.append(f'{comment} ' + ' '.join(str(v) for v in vars_list) + (' ' + str(opts) if opts else ''))
             lines.append(f"# statsmodels OLS/Logit/Probit/Poisson eller regress-predict pred/residuals")
@@ -7025,6 +7853,120 @@ class MicroInterpreter:
             return lines
         lines.append(f'{comment} (ukjent kommando)')
         return lines
+
+    def _execute_scrub(self, cmd, args):
+        """Kjør en scrub-VERB(...)-kommando: dataminimering via protect på aktivt datasett.
+
+        Kolonne-verb (jitter, noise, …) erstatter variabelen(e) in-place. unit_id
+        settes automatisk til datasettets person/enhets-nøkkel (konsistent per enhet)
+        hvis ikke oppgitt. `scrub-auto` velger default ut fra variabeltype.
+        """
+        verb = cmd[len('scrub-'):].lower()
+        if not isinstance(args, dict):
+            args = {"columns": [], "kwargs": {}}
+        columns = list(args.get('columns') or [])
+        kwargs = dict(args.get('kwargs') or {})
+        if not self.active_name or self.active_name not in self.datasets:
+            self._log("FEIL: scrub krever et aktivt datasett.")
+            return
+        try:
+            import protect
+        except Exception:
+            self._log("FEIL: protect-modulen (dataminimering) er ikke tilgjengelig.")
+            return
+        df = self.datasets[self.active_name]
+        key = _get_df_key_col(df)
+        COLUMN_VERBS = {'noise', 'jitter', 'winsorize', 'bin', 'coarsen', 'year',
+                        'month', 'diff', 'shorten', 'collapse', 'pseudonymize', 'swap'}
+        try:
+            if verb == 'auto':
+                self._scrub_auto(df, columns, kwargs, key)
+                return
+            if verb == 'risk':
+                rep = protect.risk(df, **kwargs)
+                self._log(rep.describe() if hasattr(rep, 'describe') else str(rep))
+                return
+            if verb in COLUMN_VERBS:
+                if not columns:
+                    self._log(f"FEIL: scrub-{verb} krever minst én variabel, f.eks. scrub-{verb}(VARIABEL).")
+                    return
+                missing = [c for c in columns if c not in df.columns]
+                if missing:
+                    self._log(f"FEIL: ukjent(e) variabel(er) i scrub-{verb}: {', '.join(missing)}")
+                    return
+                fn = getattr(protect, verb, None)
+                if fn is None:
+                    self._log(f"FEIL: ukjent scrub-verb: {verb}")
+                    return
+                if key and 'unit_id' not in kwargs and verb != 'pseudonymize':
+                    kwargs['unit_id'] = key
+                res = fn(df, columns, **kwargs)
+                if isinstance(res, tuple):
+                    res = res[0]
+                self.datasets[self.active_name] = res
+                self._log(f"scrub-{verb} brukt på {', '.join(columns)}.")
+                return
+            self._log(
+                f"FEIL: scrub-{verb} støttes ikke i microdata ennå. Tilgjengelig: "
+                "jitter, noise, winsorize, bin, coarsen, year, month, diff, shorten, "
+                "collapse, pseudonymize, swap, auto, risk."
+            )
+        except Exception as ex:
+            self._log(f"FEIL i scrub-{verb}: {ex}")
+
+    def _scrub_auto(self, df, columns, kwargs, key):
+        """Type-bevisst default-minimering: dato→year, numerisk→jitter, ellers→collapse."""
+        import protect
+        cols = columns or [c for c in df.columns if c != key]
+        recipe = {}
+        for col in cols:
+            if col == key or col not in df.columns:
+                continue
+            s = df[col]
+            if pd.api.types.is_datetime64_any_dtype(s):
+                recipe[col] = {'year': {}}
+            elif pd.api.types.is_numeric_dtype(s):
+                recipe[col] = {'jitter': {}}
+            else:
+                recipe[col] = {'collapse': {'rare_below': 5}}
+        if not recipe:
+            self._log("scrub-auto: fant ingen variabler å beskytte.")
+            return
+        kw = dict(kwargs)
+        if key and 'unit_id' not in kw:
+            kw['unit_id'] = key
+        res = protect.protect(df, recipe=recipe, **kw)
+        log = None
+        if isinstance(res, tuple):
+            new_df, log = res[0], (res[1] if len(res) > 1 else None)
+        else:
+            new_df = res
+        self.datasets[self.active_name] = new_df
+        self._log("scrub-auto brukt på: " + ", ".join(recipe.keys()))
+        if log is not None and hasattr(log, 'to_text'):
+            try:
+                self._log(log.to_text())
+            except Exception:
+                pass
+
+    def _apply_import_scrub(self, spec, alias):
+        """Anvend et scrub-suffiks fra en import-linje på den nyimporterte kolonnen.
+
+        Kun kolonne-lokale verb. Datasett-avhengige verb (collapse/swap/risk) hopper
+        over med en advarsel — de bør kjøres som egen linje på det ferdige datasettet.
+        """
+        verb = (spec.get('verb') or '').lower()
+        if verb in ('collapse', 'swap', 'risk'):
+            self._log(
+                f"ADVARSEL: scrub-{verb} kjøres ikke ved import (avhenger av hele "
+                "datasettet). Kjør det som egen linje etter at datasettet er bygd."
+            )
+            return
+        try:
+            parsed = self.parser._parse_scrub_args(spec.get('args_raw', '') or '')
+        except Exception:
+            parsed = {"columns": [], "kwargs": {}}
+        self._execute_scrub('scrub-' + verb, {"columns": [alias], "kwargs": parsed.get('kwargs', {})})
 
     def _execute_instruction(self, instr):
         cmd = instr['command']
@@ -7059,6 +8001,7 @@ class MicroInterpreter:
             _strict_check_cmds = (
                 'collapse', 'aggregate', 'summarize', 'correlate', 'ci', 'anova',
                 'normaltest', 'regress', 'logit', 'probit', 'poisson', 'mlogit',
+                'negative-binomial', 'negative-binomial-predict',
                 'regress-panel', 'ivregress', 'generate', 'replace', 'keep', 'drop'
             )
             if cmd in _strict_check_cmds:
@@ -7070,6 +8013,11 @@ class MicroInterpreter:
                 except ValueError as _strict_err:
                     self._log(f"FEIL: {_strict_err}")
                     return
+
+            # 0b. Scrub-kommandoer (dataminimering via protect)
+            if cmd.startswith('scrub-'):
+                self._execute_scrub(cmd, args)
+                return
 
             # 1. Globale/Sesjons-kommandoer
             if cmd == 'create-dataset':
@@ -7278,11 +8226,18 @@ class MicroInterpreter:
                     return
 
                 # --- Gammel syntaks: merge datasett-navn [, on(nøkkel)] ---
+                if args[0] not in self.datasets:
+                    self._log(
+                        f"FEIL: Datasett '{args[0]}' finnes ikke. "
+                        f"Tilgjengelige datasett: {', '.join(self.datasets) or '(ingen)'}."
+                    )
+                    return
                 target_df = self.datasets[args[0]]
                 how = 'outer' if opts.get('outer_join') else 'left'
                 _active_entity = self.dataset_entity_types.get(self.active_name, 'person')
                 _default_key   = _ENTITY_ID_COL.get(_active_entity, 'unit_id')
-                on_opt = opts.get('on', _default_key)
+                _explicit_on = opts.get('on')
+                on_opt = _explicit_on or _default_key
                 # S2: avvis multi-key også i gammel syntaks
                 if isinstance(on_opt, str) and len(on_opt.split()) > 1:
                     _keys = on_opt.split()
@@ -7295,24 +8250,59 @@ class MicroInterpreter:
                     )
                     return
                 on_cols = on_opt.split() if isinstance(on_opt, str) else list(on_opt)
-                on_cols = [c for c in on_cols if c in self.active_df.columns and c in target_df.columns]
-                if not on_cols:
-                    on_cols = [c for c in [_default_key] if c in self.active_df.columns and c in target_df.columns]
-                if not on_cols:
-                    on_cols = list(set(self.active_df.columns) & set(target_df.columns))
+                if _explicit_on:
+                    # Eksplisitt on(): nøkkelen MÅ finnes i begge datasett —
+                    # ikke bytt stille til en annen nøkkel.
+                    _missing = [
+                        c for c in on_cols
+                        if c not in self.active_df.columns or c not in target_df.columns
+                    ]
+                    if _missing:
+                        self._log(
+                            f"FEIL: Koblingsvariabel '{', '.join(_missing)}' finnes ikke "
+                            f"i både {self.active_name} og {args[0]}. "
+                            f"Kolonner i {self.active_name}: {list(self.active_df.columns)}. "
+                            f"Kolonner i {args[0]}: {list(target_df.columns)}."
+                        )
+                        return
+                else:
+                    on_cols = [c for c in on_cols if c in self.active_df.columns and c in target_df.columns]
+                    if not on_cols:
+                        on_cols = list(set(self.active_df.columns) & set(target_df.columns))
+                    if not on_cols:
+                        self._log(
+                            f"FEIL: Fant ingen felles koblingsvariabel mellom "
+                            f"{self.active_name} og {args[0]}. Angi nøkkel med on(...)."
+                        )
+                        return
                 self.datasets[self.active_name] = pd.merge(self.active_df, target_df, on=on_cols, how=how)
                 n_str = f"{len(self.datasets[self.active_name]):,}".replace(",", " ")
-                self._log(f"Flettet variabler fra {args[0]} inn i {self.active_name} med {n_str} enheter")
+                self._log(
+                    f"Flettet variabler fra {args[0]} inn i {self.active_name} "
+                    f"med {n_str} enheter (koblet på {', '.join(on_cols)})"
+                )
                 return
 
             # Label-kommandoer (krever ikke aktivt datasett)
             if cmd == 'define-labels':
                 if 'name' in args and 'pairs' in args:
                     self.label_manager.define_labels(args['name'], args['pairs'])
+                else:
+                    self._log(
+                        "FEIL: define-labels: ugyldig syntaks — forventer "
+                        "kodelistenavn etterfulgt av verdi/etikett-par, f.eks. "
+                        "define-labels yrke 1 'Ufaglært arbeider' 2 'Faglært'. "
+                        "Husk anførselstegn rundt etiketter med mellomrom."
+                    )
                 return
             if cmd == 'assign-labels':
                 if 'var' in args and 'codelist' in args:
                     self.label_manager.assign_labels(args['var'], args['codelist'])
+                else:
+                    self._log(
+                        "FEIL: assign-labels: ugyldig syntaks — forventer "
+                        "variabelnavn og kodelistenavn: assign-labels var kodeliste"
+                    )
                 return
             if cmd == 'drop-labels':
                 if 'names' in args:
@@ -7344,24 +8334,28 @@ class MicroInterpreter:
                 args_list = args if isinstance(args, (list, tuple)) else []
                 if args_list:
                     key = str(args_list[0]).lower()
+                    # Merk: disse innstillingene lagres men er ikke koblet inn i
+                    # beregningene ennå. Vær ærlig om det i loggen i stedet for å
+                    # gi inntrykk av at de virker ("Satt seed = 42").
+                    _NO_EFFECT = "(lagret, men påvirker ikke beregninger ennå)"
                     if key == 'alpha' and len(args_list) >= 2:
                         try:
                             self._config['alpha'] = float(args_list[1])
-                            self._log(f"Satt alpha = {self._config['alpha']}")
+                            self._log(f"alpha = {self._config['alpha']} {_NO_EFFECT}")
                         except ValueError:
                             self._log(f"FEIL: Ugyldig alpha-verdi: {args_list[1]}")
                     elif key == 'seed' and len(args_list) >= 2:
                         try:
                             self._config['seed'] = int(args_list[1])
-                            self._log(f"Satt seed = {self._config['seed']}")
+                            self._log(f"seed = {self._config['seed']} {_NO_EFFECT}")
                         except ValueError:
                             self._log(f"FEIL: Ugyldig seed-verdi: {args_list[1]}")
                     elif key == 'nocache':
                         self._config['cache'] = False
-                        self._log("Cache deaktivert")
+                        self._log(f"cache av {_NO_EFFECT}")
                     elif key == 'cache':
                         self._config['cache'] = True
-                        self._log("Cache aktivert")
+                        self._log(f"cache på {_NO_EFFECT}")
                     else:
                         self._log(f"configure: ukjent innstilling '{key}'")
                 return
@@ -7440,14 +8434,22 @@ class MicroInterpreter:
                                 _t6_targets.append(_tn)
                                 _t6_snapshots[_tn] = df_target[_tn].copy()
                 result = self.transform_handler.execute(cmd, df_target, args, opts_copy)
-                # T1: populasjon må være ≥1000 etter keep/drop if
+                # destring konverterer streng → tall: merk utdata-kolonnene som
+                # numeriske, så regress/summarize ikke avviser dem som alfanumeriske.
+                if cmd == 'destring' and isinstance(args, dict):
+                    _pfx = opts.get('prefix', '') or ''
+                    _sfx = opts.get('suffix', '') or ''
+                    for _dv in (args.get('vars') or []):
+                        self._numeric_override_cols.add(f"{_pfx}{_dv}{_sfx}")
+                # T1: populasjon må være over terskelen (standard 1000) etter keep/drop if
                 if (cmd in ('keep', 'drop') and _row_filter and result is not None
                         and _is_disclosure_control()):
                     _n_new = len(result)
-                    if _n_new < _DC_MIN_POPULATION:
+                    _min_pop = _dc_threshold('dc_min_population')
+                    if _n_new < _min_pop:
                         self._log(
                             f"FEIL: {cmd} ville redusere populasjonen til {_n_new} enheter. "
-                            f"microdata.no krever minst {_DC_MIN_POPULATION} enheter per "
+                            f"microdata.no krever minst {_min_pop} enheter per "
                             f"populasjon. Datasettet er uendret."
                         )
                         return
@@ -7517,11 +8519,12 @@ class MicroInterpreter:
                 else:
                     n_keep = max(1, int(n_total * args['fraction']))
                     idx = rng.choice(df_src.index, size=n_keep, replace=False)
-                # T1: sample-resultatet må være ≥1000 enheter
-                if _is_disclosure_control() and n_keep < _DC_MIN_POPULATION:
+                # T1: sample-resultatet må være over terskelen (standard 1000)
+                _min_pop = _dc_threshold('dc_min_population')
+                if _is_disclosure_control() and n_keep < _min_pop:
                     self._log(
                         f"FEIL: sample ville redusere populasjonen til {n_keep} enheter. "
-                        f"microdata.no krever minst {_DC_MIN_POPULATION} enheter per "
+                        f"microdata.no krever minst {_min_pop} enheter per "
                         f"populasjon. Datasettet er uendret."
                     )
                     return
@@ -7529,12 +8532,10 @@ class MicroInterpreter:
                 self._log(f"-> Sample: beholdt {n_keep} av {n_total} observasjoner (seed={args['seed']}).")
                 return
 
-            # 2b. If-maskering: bare for kommandoer som bruker cond som delmengde (ikke for drop/keep/replace som bruker full df)
-            _cond_filter_commands = frozenset([
-                'sample', 'summarize', 'summarize-panel', 'tabulate', 'tabulate-panel', 'transitions-panel',
-                'correlate', 'ci', 'anova', 'normaltest', 'collapse'
-            ])
-            if cond and cmd != 'generate' and cmd in _cond_filter_commands:
+            # 2b. If-maskering: bare for kommandoer som bruker cond som delmengde
+            # (ikke for drop/keep/replace/recode som maskerer på full df).
+            # Kommandolisten (_COND_FILTER_COMMANDS, modulnivå) følger manualen.
+            if cond and cmd in _COND_FILTER_COMMANDS:
                 mask = self._eval_condition_mask(df_target, cond)
                 if mask is not None:
                     df_target = df_target.loc[mask].copy()
@@ -7543,6 +8544,13 @@ class MicroInterpreter:
                         df_target = df_target.loc[_py_eval_cond(df_target, cond)].copy()
                     except Exception:
                         df_target = df_target.query(cond).copy()
+            elif cond and cmd != 'generate':
+                # Kommandoen verken filtrerer eller maskerer på betingelsen —
+                # si det høyt i stedet for å stille ignorere den.
+                self._log(
+                    f"ADVARSEL: 'if'-betingelse støttes ikke for kommandoen "
+                    f"'{cmd}' — betingelsen er ignorert."
+                )
             if cond and cmd == 'generate':
                 opts = dict(opts)
                 opts['_condition'] = cond
@@ -7569,16 +8577,96 @@ class MicroInterpreter:
                 if _ds_entity is None and _vshort:
                     self.dataset_entity_types[self.active_name] = _var_entity
 
-                new_data = self.data_engine.generate(cmd, args, df_target)
+                # Temporalitet-sjekk: Tverrsnitt/Akkumulert/Forløp krever importdato
+                if cmd in ('import', 'import-event') and isinstance(args, dict):
+                    _temp = _vmeta.get('temporalitet', '')
+                    _date1 = args.get('date1')
+                    if _temp and _temp.lower() != 'fast' and not _date1:
+                        _vpath_disp = args.get('var', _vshort)
+                        self._log(
+                            f"FEIL: «{_vshort}» er en {_temp}-variabel og krever en importdato.\n"
+                            f"Legg til dato i kommandoen: import {_vpath_disp} ÅÅÅÅ-MM-DD"
+                        )
+                        return
+                    if _temp.lower() == 'fast' and _date1:
+                        self._log(
+                            f"ADVARSEL: «{_vshort}» er en Fast-variabel — dato ignoreres."
+                        )
+                    # Dato-validering mot Gyldighetsperiode (det årlige rutenettet).
+                    # Streng i static-modus (ingen data finnes ellers); advarsel i dynamic.
+                    _valid_dates = _valid_import_dates_for(_vmeta)
+                    if _valid_dates is not None and _date1 and _date1 not in _valid_dates:
+                        _sorted = sorted(_valid_dates)
+                        _first, _last = _sorted[0], _sorted[-1]
+                        # Vis HELE intervallet (første–siste), ikke «…», så det er
+                        # tydelig at variabelen er avsluttet hvis året er for høyt.
+                        _yr = _date1[:4]
+                        _too_late = _yr > _last[:4]
+                        _hint = (f" Variabelen er avsluttet i {_last[:4]} — for nyere år, bruk en "
+                                 f"variant som er gyldig da (f.eks. en annen årgang/registerversjon "
+                                 f"av samme variabel).") if _too_late else ""
+                        _static_mode = (globals().get('M2PY_DATA_SOURCE', 'dynamic') == 'static'
+                                        and getattr(self, 'static_source', None) is not None)
+                        if _static_mode:
+                            self._log(
+                                f"FEIL: «{_vshort}» har ingen gyldig importdato {_date1}. "
+                                f"Gyldige datoer er årlige fra {_first} til {_last}.{_hint}"
+                            )
+                            return
+                        self._log(
+                            f"ADVARSEL: {_date1} er ikke en standard importdato for «{_vshort}» "
+                            f"(gyldige er årlige fra {_first} til {_last}).{_hint}"
+                        )
+
+                # Datakilde: statiske filer (hvis aktivt og tilgjengelig) ellers generering.
+                new_data = None
+                # outer_join: generer variabelen mot HELE populasjonen (ikke bare
+                # enhetene som alt finnes i datasettet), så enheter som mangler i det
+                # eksisterende datasettet faktisk kan legges til ved unionen under.
+                _gen_target = df_target
+                if opts.get('outer_join') and not (df_target.empty and len(df_target.columns) <= 1):
+                    _gen_target = df_target.iloc[0:0]
+                _use_static = (globals().get('M2PY_DATA_SOURCE', 'dynamic') == 'static'
+                               and getattr(self, 'static_source', None) is not None)
+                if _use_static:
+                    try:
+                        new_data = self.static_source.generate(cmd, args, _gen_target)
+                    except Exception as _se:
+                        self._log(f"(static-kilde feilet, faller tilbake til generering: {_se})")
+                        new_data = None
+                if new_data is None:
+                    new_data = self.data_engine.generate(cmd, args, _gen_target)
+                # Synlig advarsel når ekstern metadata/kodeliste ikke kunne lastes
+                # og vi falt tilbake til demo-verdier (etiketter/fordelinger kan avvike).
+                for _w in self.data_engine.drain_fallback_warnings():
+                    self._log(
+                        f"ADVARSEL: klarte ikke å laste ekstern metadata/kodeliste for "
+                        f"'{_w}' — bruker innebygde demo-verdier. Etiketter og fordelinger "
+                        f"kan avvike fra det ekte registeret."
+                    )
                 # Omdøp unit_id → enhetstype-korrekt nøkkelkolonne (f.eks. PERSONID_1 for persondata)
                 _id_col = _ENTITY_ID_COL.get(_var_entity, 'unit_id')
                 if _id_col != 'unit_id' and 'unit_id' in new_data.columns:
                     new_data = new_data.rename(columns={'unit_id': _id_col})
+                # values(): importer kun enheter med gitte kodeverdier for variabelen.
+                # values_from(ds): behold kun enheter som finnes i et annet datasett.
+                _alias_for_filter = args.get('alias') or (args.get('var', '').split('/')[-1] if args.get('var') else '')
+                if opts.get('values') not in (None, True) and _alias_for_filter in new_data.columns:
+                    _wanted = {v.strip() for v in str(opts['values']).split(',') if v.strip() != ''}
+                    if _wanted:
+                        _col = new_data[_alias_for_filter].astype(str).str.strip()
+                        new_data = new_data[_col.isin(_wanted)].reset_index(drop=True)
+                if opts.get('values_from') not in (None, True):
+                    _other = self.datasets.get(str(opts['values_from']).strip())
+                    if _other is not None and _id_col in _other.columns and _id_col in new_data.columns:
+                        new_data = new_data[new_data[_id_col].isin(_other[_id_col])].reset_index(drop=True)
                 if df_target.empty and len(df_target.columns) <= 1:
                     # Helt tomt datasett (ingen kolonner utenom evt. nøkkel) — fyll direkte
                     self.datasets[self.active_name] = new_data
                 else:
-                    how = 'outer' if opts.get('outer_join') else 'left'
+                    # Join-strategi: inner (kun enheter i begge), outer (full union),
+                    # ellers left (standard — behold eksisterende populasjon).
+                    how = 'inner' if opts.get('inner_join') else ('outer' if opts.get('outer_join') else 'left')
                     # NPR-datasett: bruk AGGRSHOPPID (unik per episode) som merge-nøkkel
                     _merge_key = (
                         'AGGRSHOPPID'
@@ -7648,6 +8736,10 @@ class MicroInterpreter:
                     msg = base
 
                 self._log(msg)
+                # Valgfri scrub ved import (kun single import/import-event, kolonne-lokale verb)
+                _scrub_spec = args.get('scrub') if isinstance(args, dict) else None
+                if _scrub_spec and cmd in ('import', 'import-event'):
+                    self._apply_import_scrub(_scrub_spec, alias)
                 return
 
             # 4. Statistikk og Transformasjon
@@ -7865,7 +8957,7 @@ class MicroInterpreter:
                 return
 
             # 6. Regresjon
-            if cmd in ['regress', 'logit', 'probit', 'poisson', 'regress-panel', 'regress-panel-predict', 'regress-panel-diff', 'hausman', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'rdd']:
+            if cmd in ['regress', 'logit', 'probit', 'poisson', 'negative-binomial', 'negative-binomial-predict', 'regress-panel', 'regress-panel-predict', 'regress-panel-diff', 'hausman', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'rdd']:
                 result = self.reg_engine.execute(cmd, df_target, args, opts)
                 summary, extra = result if isinstance(result, tuple) else (result, None)
                 self._log(f"\n--- Modell: {cmd} ---\n{summary}\n")
@@ -7875,8 +8967,25 @@ class MicroInterpreter:
                     self._log(f"  -> Lagt til variabler: {list(extra.keys())}")
                 return
 
+            # Ingen handler traff — si fra i stedet for stille no-op
+            # (typisk skrivefeil i kommandonavn, eller argumenter som ikke
+            # lot seg tolke slik at kommando-grenen hoppet over dem).
+            if cmd in ('for', 'end', 'textblock', 'endblock'):
+                self._log(
+                    f"FEIL: '{cmd}' er ikke gyldig her. Nøstede for-løkker "
+                    f"støttes ikke, og 'end'/'endblock' må ha en tilhørende "
+                    f"'for'/'textblock'."
+                )
+            elif isinstance(args, dict) and 'raw' in args:
+                self._log(
+                    f"FEIL: Kunne ikke tolke argumentene til '{cmd}': "
+                    f"«{args['raw']}». Sjekk syntaksen med `help {cmd}`."
+                )
+            else:
+                self._log(f"FEIL: Ukjent kommando '{cmd}'.")
+
         except Exception as e:
-            self._log(f"  FEIL PÅ KOMMANDO '{cmd}': {str(e)}")
+            self._log(f"  FEIL PÅ KOMMANDO '{cmd}' ({type(e).__name__}): {str(e)}")
 
     def _log(self, msg, indent=True):
         # Microdata-lignende: forklaringer/kommentarer under kommandoen innrykket med to mellomrom.

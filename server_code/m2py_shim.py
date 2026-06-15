@@ -60,7 +60,9 @@ def run_with_summary(script: str, max_rows: int | None = None,
 
     Returnerer en dict:
         {
-          "output": str,           # `output_log` joinet med newline
+          "output": str,           # `output_log` joinet (rå, m/ embed-markører)
+          "output_text": str,      # ren tekst (tabeller->tekst, figurer->ASCII)
+          "output_html": str,      # selvstendig HTML-dokument
           "datasets": [            # ett oppslag per datasett etterpå
             {"name": str, "n_rows": int, "columns": [str, ...]},
             ...
@@ -83,7 +85,8 @@ def run_with_summary(script: str, max_rows: int | None = None,
         interp.run_script(script)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
-    output = "\n".join(getattr(interp, "output_log", []) or [])
+    log = getattr(interp, "output_log", []) or []
+    output = "\n".join(log)
     datasets: list[dict] = []
     for name, df in getattr(interp, "datasets", {}).items():
         try:
@@ -94,4 +97,15 @@ def run_with_summary(script: str, max_rows: int | None = None,
             })
         except Exception:
             continue
-    return {"output": output, "datasets": datasets, "error": error}
+    # Etterbehandling: ren tekst + selvstendig HTML-dokument fra samme logg.
+    # output_log inneholder embed-markører (tablehtml/figure); output_render
+    # parser dem til lesbar tekst / et HTML-dokument (figurer som ASCII).
+    import output_render
+    rendered = output_render.render(log, error=error)
+    return {
+        "output": output,
+        "output_text": rendered["text"],
+        "output_html": rendered["html"],
+        "datasets": datasets,
+        "error": error,
+    }

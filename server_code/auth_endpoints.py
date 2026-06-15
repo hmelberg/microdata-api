@@ -19,6 +19,7 @@ import anvil.server
 from anvil.server import HttpResponse
 
 import auth
+import utils
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +32,11 @@ def _json(body: dict, status: int = 200) -> HttpResponse:
         body=json.dumps(body, ensure_ascii=False),
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
+
+
+def _client_ip() -> str:
+    req = anvil.server.request
+    return getattr(req, "remote_address", "") or ""
 
 
 def _load_body() -> dict:
@@ -78,6 +84,17 @@ def http_auth_email_request():
     if not auth._is_valid_email(email):
         return _json({"error": "invalid email"}, status=400)
 
+    # Rate-limit BEFORE issuing/sending so this endpoint can't be used to
+    # email-bomb an address or burn the Anvil send quota. Limit per requester IP
+    # and (separately) per target email, both over a 1-hour window.
+    # Per-email is the email-bomb guard; per-IP (coarser, loose enough for a
+    # shared NAT / workshop room) caps cross-address spam from one source.
+    ip = _client_ip()
+    if not utils.check_rate_limit(f"authreq_email:{email}", max_calls=5, window_sec=3600):
+        return _json({"error": "too many requests"}, status=429)
+    if ip and not utils.check_rate_limit(f"authreq_ip:{ip}", max_calls=30, window_sec=3600):
+        return _json({"error": "too many requests"}, status=429)
+
     try:
         code = auth.issue_magic_code(email)
         auth.send_magic_link_email(email, code, lang=lang)
@@ -106,6 +123,13 @@ def http_auth_email_verify():
         code = (body.get("code") or "").strip()
         if not code:
             return _json({"error": "missing code"}, status=400)
+
+        # Rate-limit code redemption per IP to throttle online brute-forcing of
+        # the (multi-use, 30-day) magic codes. The code space is large, but the
+        # codes are long-lived and many can be outstanding at once, so cap guesses.
+        ip = _client_ip()
+        if ip and not utils.check_rate_limit(f"authverify_ip:{ip}", max_calls=30, window_sec=600):
+            return _json({"error": "too many attempts"}, status=429)
 
         result = auth.consume_magic_code(code)
         if result is None:
