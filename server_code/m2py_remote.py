@@ -19,6 +19,8 @@ import io
 
 import m2py_translate as _mt
 from m2py_protection import PandasProtect
+from m2py_runtime.sources import read_source
+from m2py_protection import resolve_policy
 
 
 def _render_result(r):
@@ -68,3 +70,16 @@ def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
     return {"code": code, "out": buf.getvalue(), "html": html,
             "n": (None if df is None else int(len(df))),
             "err": err, "figs": figs, "results": results}
+
+
+def run_remote_from_sources(script, sources, *, backend="pandas", raw=False):
+    """Fetch each registered source into a DataFrame, resolve the protection
+    policy (most-restrictive across sources), and run the script.
+
+    `sources` is a list of {"alias", "location", "level"}; `alias` is the
+    dataset name the script loads. Real data only — the emulator is not used.
+    """
+    datasets = {s["alias"]: read_source(s["location"]) for s in sources}
+    policy = resolve_policy([s.get("level", "public") for s in sources])
+    return run_remote(script, datasets=datasets, backend=backend,
+                      policy=policy, raw=raw)
