@@ -1,8 +1,8 @@
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
-# Source of truth: the m2py repo (m2py.py / functions.py). This file is produced
-# by sync_to_api.sh. Edit the engine in the m2py repo and re-run that script;
-# direct edits here are overwritten on the next sync.
+# Source of truth: the m2py repo. This file is produced by sync_to_api.py.
+# Edit the engine in the m2py repo and re-run that script; direct edits here
+# are overwritten on the next sync.
 # ============================================================================
 """
 Microdata.no-funksjoner for bruk i generate-, replace- og if-uttrykk.
