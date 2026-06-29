@@ -9,14 +9,24 @@ resolve_source() seam.
 """
 from __future__ import annotations
 
-# One seeded public source: a public hospital teaching dataset (synthetic;
-# cols: lnr, lopenr, innDato, utDato, tilstand_1_1, fodselsar, kjonn; ~100k rows).
 _SOURCES = {
+    # Non-public fixture: forced remote + login + suppression. (Bytes happen to
+    # sit at a public URL, so this tests the EXECUTION path, not data residency.)
     "hospital_public_csv": {
         "source_id": "hospital_public_csv",
         "kind": "url",
         "location": "https://raw.githubusercontent.com/hmelberg/health-analytics-using-python/refs/heads/master/hospital.csv",
+        "level": "protected",
+        "default_exec": "remote",   # ignored for non-public (always remote); set for clarity
+        "status": "active",
+    },
+    # Public fixture: small CSV, runs LOCAL by default; exec(remote) opts in.
+    "demo_public_csv": {
+        "source_id": "demo_public_csv",
+        "kind": "url",
+        "location": "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/penguins.csv",
         "level": "public",
+        "default_exec": "local",
         "status": "active",
     },
 }
