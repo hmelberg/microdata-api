@@ -109,3 +109,22 @@ def run_with_summary(script: str, max_rows: int | None = None,
         "datasets": datasets,
         "error": error,
     }
+
+
+def run_extended(script: str, sources_req, backend: str = "pandas",
+                 raw: bool = False) -> dict:
+    """Resolve each requested source_id to its registered location+level, then
+    run the translator on the real data via the synced m2py_remote core.
+
+    sources_req: list of {"alias": str, "source_id": str}. The protection level
+    and location come from the registry, never from the request.
+    """
+    import m2py_remote
+    from source_registry import resolve_source
+    bound = []
+    for s in sources_req:
+        src = resolve_source(s["source_id"])
+        bound.append({"alias": s["alias"], "location": src["location"],
+                      "level": src["level"]})
+    return m2py_remote.run_remote_from_sources(
+        script, bound, backend=backend, raw=raw)

@@ -543,3 +543,29 @@ def http_run():
         return HttpResponse(status=200, body=result.get("output_text") or "",
                             headers={"Content-Type": "text/plain; charset=utf-8"})
     return _json(result)
+
+
+# ---------------------------------------------------------------------------
+# /run_extended  (kjør mot ekte data via m2py_remote + source_registry)
+
+
+@anvil.server.background_task
+def bg_run_extended(script, sources_req, backend, raw):
+    return m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
+
+
+@anvil.server.http_endpoint("/run_extended", methods=["POST"],
+                            cross_site_session=False, enable_cors=True)
+def http_run_extended():
+    # v1: the seeded source is public, so no auth is required; when a non-public
+    # source is referenced this is where authn+authz will gate (deferred).
+    body = _load_body()
+    script = (body.get("script") or "").strip()
+    if not script:
+        return _json({"error": "missing 'script'"}, status=400)
+    sources_req = body.get("sources") or []
+    backend = body.get("backend") or "pandas"
+    raw = bool(body.get("raw", False))
+    task = anvil.server.launch_background_task(
+        "bg_run_extended", script, sources_req, backend, raw)
+    return _json({"task_id": task.get_id(), "mode": "async"})
