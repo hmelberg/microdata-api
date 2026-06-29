@@ -557,8 +557,12 @@ def bg_run_extended(script, sources_req, backend, raw):
 @anvil.server.http_endpoint("/run_extended", methods=["POST"],
                             cross_site_session=False, enable_cors=True)
 def http_run_extended():
-    # v1: the seeded source is public, so no auth is required; when a non-public
-    # source is referenced this is where authn+authz will gate (deferred).
+    # Remote execution always requires login (it uses Anvil compute, and
+    # non-public sources are forced remote). The server re-resolves each
+    # source's level from the registry; it never trusts the request.
+    principal, err = _authenticate_or_fail()
+    if err:
+        return err
     body = _load_body()
     script = (body.get("script") or "").strip()
     if not script:
