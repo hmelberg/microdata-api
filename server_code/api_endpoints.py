@@ -598,3 +598,27 @@ def http_run_extended_status(**kwargs):
     err_obj = task.get_error()
     err_msg = getattr(err_obj, "message", None) or str(err_obj)
     return _json({"status": term or "failed", "error": err_msg})
+
+
+# ---------------------------------------------------------------------------
+# /source_info  (PUBLIC lookup: lets the client derive local-vs-remote)
+
+
+@anvil.server.http_endpoint("/source_info", methods=["GET"],
+                            cross_site_session=False, enable_cors=True)
+def http_source_info(**kwargs):
+    import source_registry
+    sid = (kwargs.get("id") or "").strip()
+    if not sid:
+        return _json({"error": "missing 'id'"}, status=400)
+    try:
+        src = source_registry.resolve_source(sid)
+    except KeyError:
+        return _json({"error": f"unknown source: {sid}"}, status=404)
+    is_public = src.get("level") == "public"
+    out = {"public": is_public,
+           "default_exec": src.get("default_exec", "local" if is_public else "remote")}
+    # location is returned ONLY for public sources (never leak protected origins)
+    if is_public:
+        out["location"] = src.get("location")
+    return _json(out)
