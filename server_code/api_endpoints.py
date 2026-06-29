@@ -569,3 +569,32 @@ def http_run_extended():
     task = anvil.server.launch_background_task(
         "bg_run_extended", script, sources_req, backend, raw)
     return _json({"task_id": task.get_id(), "mode": "async"})
+
+
+# ---------------------------------------------------------------------------
+# /run_extended_status  (PUBLIC poll for /run_extended background tasks)
+# Mirrors /task_status but WITHOUT auth: the v1 /run_extended path is public
+# (public source, results already disclosure-controlled). When non-public
+# sources arrive, the deferred auth/authz layer gates this alongside /run_extended.
+
+
+@anvil.server.http_endpoint("/run_extended_status", methods=["GET"],
+                            cross_site_session=False, enable_cors=True)
+def http_run_extended_status(**kwargs):
+    task_id = (kwargs.get("task_id") or "").strip()
+    if not task_id:
+        return _json({"error": "missing 'task_id'"}, status=400)
+    try:
+        task = anvil.server.get_background_task(task_id)
+    except Exception as exc:
+        return _json({"error": f"task lookup failed: {exc}"}, status=404)
+    if task is None:
+        return _json({"error": "task not found"}, status=404)
+    if not task.is_completed():
+        return _json({"status": "running"})
+    term = task.get_termination_status()
+    if term == "completed":
+        return _json({"status": "completed", "result": task.get_return_value()})
+    err_obj = task.get_error()
+    err_msg = getattr(err_obj, "message", None) or str(err_obj)
+    return _json({"status": term or "failed", "error": err_msg})
