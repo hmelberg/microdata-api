@@ -31,6 +31,26 @@ def _render_result(r):
     return "<pre>" + str(r) + "</pre>"
 
 
+def _dataset_info(ns):
+    """Sidebar metadata for each named working frame ``df_<name>`` in the
+    namespace: ``{name: {columns, dtypes, nrows}}``. Schema + row-count only —
+    no row-level data — so it is safe to return for a remote (server-held) run.
+    """
+    info = {}
+    for k, v in ns.items():
+        if not k.startswith("df_") or not hasattr(v, "columns"):
+            continue
+        try:
+            info[k[3:]] = {
+                "columns": [str(c) for c in v.columns],
+                "dtypes": {str(c): str(v[c].dtype) for c in v.columns},
+                "nrows": int(len(v)),
+            }
+        except Exception:
+            pass
+    return info
+
+
 def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
     code = _mt.translate(script, backend=backend, source_path=None,
                          allow_emulated=False, print_results=raw)
@@ -69,7 +89,8 @@ def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
 
     return {"code": code, "out": buf.getvalue(), "html": html,
             "n": (None if df is None else int(len(df))),
-            "err": err, "figs": figs, "results": results}
+            "err": err, "figs": figs, "results": results,
+            "datasetInfo": _dataset_info(ns)}
 
 
 def run_remote_from_sources(script, sources, *, backend="pandas", raw=False):
