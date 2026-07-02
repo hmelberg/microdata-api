@@ -120,11 +120,15 @@ def run_extended(script: str, sources_req, backend: str = "pandas",
     and location come from the registry, never from the request.
     """
     import m2py_remote
-    from source_registry import resolve_source
-    bound = []
+    from m2py_protection import resolve_policy
+    from source_registry import resolve_source, load_dataframe
+    # Load via the shared registry loader (handles kind="media" uploads as
+    # well as url sources), then run the synced core on in-memory frames.
+    datasets, levels = {}, []
     for s in sources_req:
         src = resolve_source(s["source_id"])
-        bound.append({"alias": s["alias"], "location": src["location"],
-                      "level": src["level"]})
-    return m2py_remote.run_remote_from_sources(
-        script, bound, backend=backend, raw=raw)
+        datasets[s["alias"]] = load_dataframe(src)
+        levels.append(src.get("level", "public"))
+    policy = resolve_policy(levels)
+    return m2py_remote.run_remote(
+        script, datasets=datasets, backend=backend, policy=policy, raw=raw)

@@ -5,3 +5,7 @@ rank_bm25
 statsmodels
 pyjwt[crypto]
 cryptography
+plotly
+lifelines
+polars
+duckdb

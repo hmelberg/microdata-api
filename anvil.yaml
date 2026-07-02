@@ -72,6 +72,12 @@ db_schema:
     indexes: []
     server: full
     title: signup_requests
+  sources:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: sources
   users:
     client: none
     columns:

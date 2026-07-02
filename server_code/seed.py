@@ -35,6 +35,7 @@ DEFAULT_WHITELIST = [
 REQUIRED_TABLES = [
     "users", "email_whitelist", "auth_tokens", "scripts",
     "ai_usage_daily", "limits_config", "audit_log", "signup_requests",
+    "sources",
 ]
 
 
@@ -126,3 +127,59 @@ def seed_phase0():
         "limits_total": len(list(app_tables.limits_config.search())),
         "whitelist_total": len(list(app_tables.email_whitelist.search())),
     }
+
+
+# Demo sources for the safepy/run_extended path. url-kind mirrors the registry
+# fixture; media-kind exercises the uploaded-bytes path (Anvil Media storage).
+_HOSPITAL_URL = ("https://raw.githubusercontent.com/hmelberg/"
+                 "health-analytics-using-python/refs/heads/master/hospital.csv")
+_PENGUINS_URL = ("https://raw.githubusercontent.com/mwaskom/"
+                 "seaborn-data/master/penguins.csv")
+
+
+@anvil.server.callable
+def seed_sources():
+    """Seed the sources table with one url-kind and one media-kind demo row.
+
+    Idempotent — rows are keyed on source_id and never overwritten. The media
+    demo downloads the hospital CSV once and stores the bytes in Anvil, so the
+    run path exercises Media loading exactly like an admin upload would.
+    """
+    if getattr(app_tables, "sources", None) is None:
+        return {"ok": False, "missing_tables": ["sources"],
+                "hint": "Apply the schema in the Anvil IDE, then re-run."}
+
+    def _safe_get(table, **kwargs):
+        try:
+            return table.get(**kwargs)
+        except Exception:
+            return None
+
+    added = []
+    now = dt.datetime.utcnow()
+    if _safe_get(app_tables.sources, source_id="demo_public_csv") is None:
+        app_tables.sources.add_row(
+            source_id="demo_public_csv", name="Penguins (demo, public)",
+            description="Seaborn penguins dataset. Public: runs locally by default.",
+            kind="url", location=_PENGUINS_URL, file=None, format="csv",
+            level="public", default_exec="local", status="active",
+            owner_email=None, created=now, updated=now)
+        added.append("demo_public_csv")
+
+    if _safe_get(app_tables.sources, source_id="hospital_media_csv") is None:
+        import anvil.http
+        import anvil.media
+        resp = anvil.http.request(_HOSPITAL_URL, blob=True)
+        media = anvil.BlobMedia("text/csv", resp.get_bytes(),
+                                name="hospital_media_csv.csv")
+        app_tables.sources.add_row(
+            source_id="hospital_media_csv", name="Hospital (demo, protected)",
+            description=("Hospital demo data stored as Anvil Media. Protected: "
+                         "server-side execution + suppression, login required."),
+            kind="media", location=None, file=media, format="csv",
+            level="protected", default_exec="remote", status="active",
+            owner_email=None, created=now, updated=now)
+        added.append("hospital_media_csv")
+
+    return {"ok": True, "added": added,
+            "total": len(list(app_tables.sources.search()))}

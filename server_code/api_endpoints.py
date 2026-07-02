@@ -546,11 +546,15 @@ def http_run():
 
 
 # ---------------------------------------------------------------------------
-# /run_extended  (kjør mot ekte data via m2py_remote + source_registry)
+# /run_extended  (kjør mot ekte data: m2py DSL via m2py_remote, eller en
+# safepy-dialekt (pandas/polars/r/duckdb) via safepy STRICT + shared suppressor)
 
 
 @anvil.server.background_task
-def bg_run_extended(script, sources_req, backend, raw):
+def bg_run_extended(script, sources_req, backend, raw, dialect="m2py"):
+    import safepy_shim
+    if dialect in safepy_shim.SAFEPY_DIALECTS:
+        return safepy_shim.run_extended(script, sources_req, dialect=dialect)
     return m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
 
 
@@ -570,21 +574,30 @@ def http_run_extended():
     sources_req = body.get("sources") or []
     backend = body.get("backend") or "pandas"
     raw = bool(body.get("raw", False))
+    # dialect selects the engine: absent/"m2py" = legacy DSL path (unchanged);
+    # a safepy dialect routes through the STRICT capability core.
+    import safepy_shim
+    dialect = (body.get("dialect") or "m2py").lower()
+    if dialect != "m2py" and dialect not in safepy_shim.SAFEPY_DIALECTS:
+        return _json({"error": f"unknown dialect: {dialect}"}, status=400)
     task = anvil.server.launch_background_task(
-        "bg_run_extended", script, sources_req, backend, raw)
+        "bg_run_extended", script, sources_req, backend, raw, dialect)
     return _json({"task_id": task.get_id(), "mode": "async"})
 
 
 # ---------------------------------------------------------------------------
-# /run_extended_status  (PUBLIC poll for /run_extended background tasks)
-# Mirrors /task_status but WITHOUT auth: the v1 /run_extended path is public
-# (public source, results already disclosure-controlled). When non-public
-# sources arrive, the deferred auth/authz layer gates this alongside /run_extended.
+# /run_extended_status  (poll for /run_extended background tasks)
+# Auth-gated like /run_extended itself: non-public sources hold real data, so
+# results must only be fetchable by logged-in principals. (Follow-up hardening:
+# record task_id -> principal at launch and 404 cross-user polls.)
 
 
 @anvil.server.http_endpoint("/run_extended_status", methods=["GET"],
                             cross_site_session=False, enable_cors=True)
 def http_run_extended_status(**kwargs):
+    principal, err = _authenticate_or_fail()
+    if err:
+        return err
     task_id = (kwargs.get("task_id") or "").strip()
     if not task_id:
         return _json({"error": "missing 'task_id'"}, status=400)
@@ -620,6 +633,12 @@ def http_source_info(**kwargs):
     except KeyError:
         return _json({"error": f"unknown source: {sid}"}, status=404)
     is_public = src.get("level") == "public"
+    if not is_public:
+        # Non-public sources are only visible to logged-in users; answer 404
+        # (not 401) to anonymous callers so existence isn't leaked.
+        principal, autherr = _authenticate_or_fail()
+        if autherr:
+            return _json({"error": f"unknown source: {sid}"}, status=404)
     out = {"public": is_public,
            "default_exec": src.get("default_exec", "local" if is_public else "remote")}
     # location is returned ONLY for public sources (never leak protected origins)

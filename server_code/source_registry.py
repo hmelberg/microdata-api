@@ -1,11 +1,15 @@
 # microdata-api/server_code/source_registry.py
-"""Minimal source registry for SafeStat remote compute (v1).
+"""Source registry for SafeStat/safepy remote compute.
 
 The protection level + location live HERE (server-side), keyed by source_id;
-the request only references source_id. v1 is a hardcoded dict with one public
-source — the Anvil Data Table + admin CRUD (register/revoke/version, upload,
-access policy) is the deferred admin-layer upgrade behind this same
-resolve_source() seam.
+the request only references source_id. Sources come from the `sources` Data
+Table (admin-managed, bytes stored as Anvil Media for kind="media"); the
+hardcoded fixtures below remain as a fallback so non-Anvil test runs and a
+fresh install keep working.
+
+Future seam: kind="encrypted_url" — location points at encrypted bytes (e.g. a
+GitHub repo) and the request carries a per-run decryption key that is used in
+memory and never stored.
 """
 from __future__ import annotations
 
@@ -32,8 +36,53 @@ _SOURCES = {
 }
 
 
+def _row_to_source(row) -> dict:
+    level = row["level"] or "protected"
+    return {
+        "source_id": row["source_id"],
+        "kind": row["kind"] or "url",
+        "location": row["location"],
+        "file": row["file"],
+        "format": row["format"],
+        "level": level,
+        "default_exec": row["default_exec"]
+            or ("local" if level == "public" else "remote"),
+        "status": "active",
+    }
+
+
 def resolve_source(source_id: str) -> dict:
+    """Data Table first, hardcoded fixtures as fallback. Raises KeyError for
+    unknown/inactive ids (callers translate that to a 404/refusal)."""
+    row = None
+    try:
+        from anvil.tables import app_tables
+        row = app_tables.sources.get(source_id=source_id)
+    except Exception:
+        row = None                     # table missing / non-Anvil test run
+    if row is not None:
+        if row["status"] != "active":
+            raise KeyError(f"unknown or inactive source_id: {source_id!r}")
+        return _row_to_source(row)
     src = _SOURCES.get(source_id)
     if src is None or src.get("status") != "active":
         raise KeyError(f"unknown or inactive source_id: {source_id!r}")
     return src
+
+
+def load_dataframe(src: dict):
+    """Resolved source dict -> pandas DataFrame.
+
+    kind="media": bytes stored in Anvil (Media object) — never leaves the app.
+    kind="url":   fetched via the shared engine reader (csv/parquet).
+    Anvil-specific loading lives here (native file), never in GENERATED code.
+    """
+    if src.get("kind") == "media" and src.get("file") is not None:
+        import io
+        import pandas as pd
+        buf = io.BytesIO(src["file"].get_bytes())
+        name = getattr(src["file"], "name", "") or ""
+        fmt = src.get("format") or ("parquet" if name.endswith(".parquet") else "csv")
+        return pd.read_parquet(buf) if fmt == "parquet" else pd.read_csv(buf)
+    from m2py_runtime.sources import read_source
+    return read_source(src["location"], src.get("format"))
