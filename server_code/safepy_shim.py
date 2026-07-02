@@ -168,6 +168,9 @@ def _leaf_html(kind, payload):
         cols = payload.get("columns") or []
         index = payload.get("index") or []
         data = payload.get("data") or []
+        # A plain 0..n-1 counter index carries no information — hide it.
+        if list(index) == list(range(len(data))):
+            return _table(cols, data)
         rows = [[ix] + list(r) for ix, r in zip(index, data)]
         return _table([""] + cols, rows)
     if ptype == "scalar":

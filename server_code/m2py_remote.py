@@ -23,9 +23,21 @@ from m2py_runtime.sources import read_source
 from m2py_protection import resolve_policy
 
 
+def _trivial_index(df) -> bool:
+    """True when the index is a plain 0..n-1 counter carrying no information
+    (fresh/reset frames) — hide it from output; keep real indexes (group keys)."""
+    try:
+        idx = df.index
+        return (getattr(idx, "name", None) is None
+                and list(idx) == list(range(len(df))))
+    except Exception:
+        return False
+
+
 def _render_result(r):
     if hasattr(r, "to_html"):
-        return r.to_html(border=0, classes="output-table")
+        return r.to_html(border=0, classes="output-table",
+                         index=not _trivial_index(r))
     if hasattr(r, "summary"):
         return "<pre>" + str(r.summary()) + "</pre>"
     return "<pre>" + str(r) + "</pre>"
@@ -83,7 +95,7 @@ def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
     html = ""
     if df is not None:
         try:
-            html = df.head(50).to_html(border=0)
+            html = df.head(50).to_html(border=0, index=not _trivial_index(df))
         except Exception:
             html = "<pre>" + str(df)[:5000] + "</pre>"
 
