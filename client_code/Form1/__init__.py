@@ -11,4 +11,7 @@ class Form1(Form1Template):
     # Set Form properties and Data Bindings.
     self.init_components(**properties)
 
-    # Any code you write here will run before the form opens.
+    # Admin entry: the AdminSources form does its own login + is_admin check.
+    admin_link = Link(text="Admin: datakilder", icon="fa:database")
+    admin_link.set_event_handler("click", lambda **e: open_form("AdminSources"))
+    self.navbar_links.add_component(admin_link)

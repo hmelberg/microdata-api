@@ -36,6 +36,15 @@ _SOURCES = {
 }
 
 
+def _cell(row, name, default=None):
+    """Read a column that may not exist yet on older rows (Anvil only adds
+    columns on write, and reading a missing column raises)."""
+    try:
+        return row[name]
+    except Exception:
+        return default
+
+
 def _row_to_source(row) -> dict:
     level = row["level"] or "protected"
     return {
@@ -47,6 +56,7 @@ def _row_to_source(row) -> dict:
         "level": level,
         "default_exec": row["default_exec"]
             or ("local" if level == "public" else "remote"),
+        "encrypted": bool(_cell(row, "encrypted", False)),
         "status": "active",
     }
 
@@ -80,7 +90,11 @@ def load_dataframe(src: dict):
     if src.get("kind") == "media" and src.get("file") is not None:
         import io
         import pandas as pd
-        buf = io.BytesIO(src["file"].get_bytes())
+        data = src["file"].get_bytes()
+        if src.get("encrypted"):
+            from media_crypto import decrypt_bytes
+            data = decrypt_bytes(data)   # plaintext exists only in memory
+        buf = io.BytesIO(data)
         name = getattr(src["file"], "name", "") or ""
         fmt = src.get("format") or ("parquet" if name.endswith(".parquet") else "csv")
         return pd.read_parquet(buf) if fmt == "parquet" else pd.read_csv(buf)
