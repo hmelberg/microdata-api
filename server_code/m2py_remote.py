@@ -63,7 +63,35 @@ def _dataset_info(ns):
     return info
 
 
+# Plot verbs whose plotly JSON embeds row-level values (scatter/box points,
+# px.histogram raw x, per-row sankey transitions) — refused on non-public data.
+_RAW_PLOT_VERBS = ("scatter", "hexbin", "sankey", "boxplot", "histogram")
+
+
+def _raw_plot_verbs_used(script):
+    used = []
+    for line in script.splitlines():
+        stripped = line.split("//", 1)[0].strip()
+        if not stripped:
+            continue
+        cmd = stripped.split()[0].lower()
+        if cmd in _RAW_PLOT_VERBS and cmd not in used:
+            used.append(cmd)
+    return used
+
+
 def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
+    level = (policy or {}).get("level", "public")
+    if level != "public":
+        raw = False   # print_results echoes raw result objects to stdout
+        bad = _raw_plot_verbs_used(script)
+        if bad:
+            return {"code": "", "out": "", "html": "", "n": None,
+                    "err": ("Personvern: " + ", ".join(bad) + " viser "
+                            "enkeltobservasjoner og er ikke tilgjengelig for "
+                            "beskyttede data. Bruk aggregerte diagrammer "
+                            "(f.eks. barchart) i stedet."),
+                    "figs": [], "results": [], "datasetInfo": {}}
     code = _mt.translate(script, backend=backend, source_path=None,
                          allow_emulated=False, print_results=raw)
     ns = {"datasets": dict(datasets)}
@@ -93,7 +121,9 @@ def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
 
     df = ns.get("df")  # translator footer materializes the final active frame as `df`
     html = ""
-    if df is not None:
+    if df is not None and level == "public":
+        # The head(50) preview is raw rows — public data only. Non-public runs
+        # get schema/row count via datasetInfo/n instead.
         try:
             html = df.head(50).to_html(border=0, index=not _trivial_index(df))
         except Exception:
