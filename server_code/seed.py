@@ -168,8 +168,8 @@ def seed_sources():
 
     if _safe_get(app_tables.sources, source_id="hospital_media_csv") is None:
         import anvil.http
-        import anvil.media
-        resp = anvil.http.request(_HOSPITAL_URL, blob=True)
+        # server-side anvil.http.request returns a Media object by default
+        resp = anvil.http.request(_HOSPITAL_URL)
         media = anvil.BlobMedia("text/csv", resp.get_bytes(),
                                 name="hospital_media_csv.csv")
         app_tables.sources.add_row(
