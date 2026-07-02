@@ -8,7 +8,19 @@ db_schema:
     title: ai_usage_daily
   api_usage:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: key_alias
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: window_start
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: count
+      type: number
     indexes: []
     server: full
     title: api_usage
@@ -20,7 +32,48 @@ db_schema:
     title: audit_log
   auth_tokens:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: ip
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: token_hash
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: created
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: revoked
+      type: bool
+    - admin_ui: {}
+      client_hidden: null
+      name: user_agent
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: expires
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: last_used
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: magic_email
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: kind
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: user
+      target: users
+      type: link_single
     indexes: []
     server: full
     title: auth_tokens
@@ -32,22 +85,82 @@ db_schema:
     title: email_whitelist
   eval_runs:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: cache_stats
+      type: simpleObject
+    - admin_ui: {}
+      client_hidden: null
+      name: errors
+      type: unresolvedArray
+    - admin_ui: {}
+      client_hidden: null
+      name: api_key_alias
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: validation_passed
+      type: bool
+    - admin_ui: {}
+      client_hidden: null
+      name: script
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: validation_tier
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: question
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: latency_ms
+      type: number
+    - admin_ui: {}
+      client_hidden: null
+      name: variables_used
+      type: unresolvedArray
+    - admin_ui: {}
+      client_hidden: null
+      name: ts
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: lang
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: endpoint
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: commands_used
+      type: unresolvedArray
+    - admin_ui: {}
+      client_hidden: null
+      name: request_id
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: model
+      type: string
     indexes: []
     server: full
     title: eval_runs
   files:
     client: none
     columns:
-    - admin_ui: {order: 0, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: path
       type: string
-    - admin_ui: {order: 1, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: file
       type: media
-    - admin_ui: {order: 2, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: file_version
       type: string
@@ -74,37 +187,141 @@ db_schema:
     title: signup_requests
   sources:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: description
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: format
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: updated
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: name
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: file
+      type: media
+    - admin_ui: {}
+      client_hidden: null
+      name: created
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: default_exec
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: owner_email
+      type: unresolved
+    - admin_ui: {}
+      client_hidden: null
+      name: level
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: status
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: kind
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: source_id
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: location
+      type: string
     indexes: []
     server: full
     title: sources
   users:
     client: none
     columns:
-    - admin_ui: {order: 0, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: email
       type: string
-    - admin_ui: {order: 1, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: true
       name: enabled
       type: bool
-    - admin_ui: {order: 2, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: true
       name: last_login
       type: datetime
-    - admin_ui: {order: 3, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: true
       name: password_hash
       type: string
-    - admin_ui: {order: 4, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: true
       name: n_password_failures
       type: number
-    - admin_ui: {order: 5, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: true
       name: confirmed_email
       type: bool
+    - admin_ui: {}
+      client_hidden: null
+      name: last_credit_renewal
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: category
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: expires_at
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: deleted_at
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: created
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: provider_kind
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: is_admin
+      type: bool
+    - admin_ui: {}
+      client_hidden: null
+      name: microsoft_tid
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: credits
+      type: number
+    - admin_ui: {}
+      client_hidden: null
+      name: is_superuser
+      type: bool
+    - admin_ui: {}
+      client_hidden: null
+      name: notes
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: display_name
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: microsoft_oid
+      type: string
     indexes: []
     server: full
     title: users
