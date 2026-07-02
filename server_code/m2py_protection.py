@@ -82,6 +82,10 @@ class PandasProtect:
     """
 
     _COUNT_COLS = ("n", "count")
+    # tabulate's derived percentage columns: exact values would let a reader
+    # back out a suppressed count, so they are masked with the counts and
+    # rounded to whole percent.
+    _PCT_COLS = ("cellpct", "rowpct", "colpct")
 
     def suppress(self, result, spec):
         if spec is None:
@@ -90,6 +94,8 @@ class PandasProtect:
             import pandas as pd
         except Exception:
             return result
+        if hasattr(result, "params") and hasattr(result, "conf_int"):
+            return self._suppress_model(result, spec)
         if not isinstance(result, pd.DataFrame):
             return result
         count_col = next((c for c in self._COUNT_COLS if c in result.columns), None)
@@ -104,5 +110,42 @@ class PandasProtect:
                 if c == count_col or not pd.api.types.is_numeric_dtype(out[c]):
                     continue
                 out[c] = p.suppress(out[c], counts=counts, min_n=min_n)
+        for c in self._PCT_COLS:
+            if c in out.columns:
+                out[c] = p.suppress(out[c], counts=counts, min_n=min_n, round=1)
         out[count_col] = p.suppress(counts, min_n=min_n, round=spec.get("round"))
         return out
+
+    def _suppress_model(self, result, spec):
+        """statsmodels-style results: per-coefficient at-risk suppression.
+
+        The at-risk count of a coefficient is the number of nonzero entries in
+        its design-matrix column (a dummy's coefficient is close to a small
+        group's mean). Renders as a coef table; the full summary() (loglik,
+        residual details, …) is withheld on non-public data. Results without a
+        readable design matrix pass through unchanged (documented gap)."""
+        try:
+            import numpy as np
+            import pandas as pd
+            exog = getattr(getattr(result, "model", None), "exog", None)
+            if exog is None:
+                return result
+            params = result.params
+            if not hasattr(params, "index"):
+                names = [f"x{i}" for i in range(len(params))]
+                params = pd.Series(np.asarray(params), index=names)
+            ci = result.conf_int()
+            if not hasattr(ci, "loc"):
+                ci = pd.DataFrame(np.asarray(ci), index=params.index, columns=[0, 1])
+            at_risk = pd.Series((np.asarray(exog) != 0).sum(axis=0),
+                                index=params.index)
+            min_n = spec.get("min_n", 5)
+            out = pd.DataFrame({
+                "coef": params.where(at_risk >= min_n),
+                "ci_low": ci.iloc[:, 0].where(at_risk >= min_n),
+                "ci_high": ci.iloc[:, 1].where(at_risk >= min_n),
+            })
+            out.index.name = "term"
+            return out
+        except Exception:
+            return result

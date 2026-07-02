@@ -20,11 +20,52 @@ IR argument shapes (from ``m2py.MicroParser.parse_line``):
     summarize        : args=[var, ...], options={'by'}
 """
 
+import threading
+
 import numpy as np
 import pandas as pd
 
 from m2py import _py_eval_expr, _py_eval_cond, AGG_STAT_ALIAS
 from .sources import read_source  # noqa: F401  (used by generated code: ops.read_source)
+
+
+# ── release spec (compute-to-data) ───────────────────────────────────────────
+# m2py_remote sets the active post-suppression spec ({min_n, round, …} or None)
+# around each server run; value-releasing ops consult it so chart values and
+# normalized tables can't bypass the table suppression. Thread-local: concurrent
+# runs in other threads never see each other's spec; local/Pyodide runs never
+# set it, so behaviour there is unchanged.
+
+_release_ctx = threading.local()
+
+
+def set_release_spec(spec):
+    _release_ctx.spec = spec or None
+
+
+def get_release_spec():
+    return getattr(_release_ctx, "spec", None)
+
+
+def _released_counts(counts, drop=True):
+    """Counts (Series) -> suppressed (< min_n masked) + rounded per the active
+    release spec; unchanged when no spec is active. drop=True removes masked
+    entries (charts drop the category instead of plotting a gap)."""
+    spec = get_release_spec()
+    if not spec:
+        return counts
+    import protect as p
+    out = p.suppress(counts, min_n=spec.get("min_n", 5), round=spec.get("round"))
+    return out.dropna() if drop else out
+
+
+def _released_values(values, counts):
+    """Aggregate values (Series) masked where their group count < min_n."""
+    spec = get_release_spec()
+    if not spec:
+        return values
+    import protect as p
+    return p.suppress(values, counts=counts, min_n=spec.get("min_n", 5))
 
 
 # ── value-producing verbs ────────────────────────────────────────────────────
@@ -374,7 +415,8 @@ def normaltest(df, vars=None):
 
 def ci(df, vars=None, level=95):
     """Confidence interval for the mean of each numeric variable (Student-t).
-    Returns ``[variable, mean, se, ci_low, ci_high]``."""
+    Returns ``[variable, count, mean, se, ci_low, ci_high]`` — the count column
+    both informs and lets the release layer suppress small-n rows."""
     from scipy import stats as st
     vars = _numeric_vars(df, vars)
     lv = float(level) / 100 if level else 0.95
@@ -383,12 +425,12 @@ def ci(df, vars=None, level=95):
         s = df[v].dropna()
         n, mean = len(s), df[v].dropna().mean()
         if n < 2:
-            rows.append({"variable": v, "mean": mean, "se": np.nan,
+            rows.append({"variable": v, "count": n, "mean": mean, "se": np.nan,
                          "ci_low": np.nan, "ci_high": np.nan})
             continue
         sem = st.sem(s)
         t = st.t.ppf((1 + lv) / 2, n - 1)
-        rows.append({"variable": v, "mean": mean, "se": sem,
+        rows.append({"variable": v, "count": n, "mean": mean, "se": sem,
                      "ci_low": mean - t * sem, "ci_high": mean + t * sem})
     return pd.DataFrame(rows)
 
@@ -473,6 +515,12 @@ def transitions_panel(df, vars=None):
         if s.empty:
             continue
         ct = pd.crosstab(s[var], s["_next"], normalize="index")
+        spec = get_release_spec()
+        if spec:
+            # probabilities of transitions with < min_n movers are masked —
+            # a normalized cell must not reveal what the count table suppresses
+            counts = pd.crosstab(s[var], s["_next"])
+            ct = ct.where(counts >= spec.get("min_n", 5))
         long = ct.reset_index().melt(id_vars=var, var_name="to", value_name="prob")
         long = long.rename(columns={var: "from"})
         long.insert(0, "variable", var)
@@ -552,6 +600,12 @@ def correlate(df, vars, pairwise=False, covariance=False):
     if not pairwise:
         sub = sub.dropna()
     m = sub.cov() if covariance else sub.corr(method="pearson")
+    spec = get_release_spec()
+    if spec:
+        # mask correlations computed from fewer than min_n (pairwise) rows
+        notna = sub.notna().astype(int)
+        pair_n = notna.T @ notna
+        m = m.where(pair_n >= spec.get("min_n", 5))
     return m.reset_index(names="variable")
 
 
@@ -615,30 +669,30 @@ def barchart(df, vars, stat="count", over=None, horizontal=False, stack=False):
     if stat in ("count", "percent"):
         as_pct = stat == "percent"
         if len(vars_list) > 1:                       # one bar per variable
-            counts = [int(df[v].count()) for v in vars_list]
+            counts = _released_counts(pd.Series(
+                [int(df[v].count()) for v in vars_list], index=vars_list))
             if as_pct:
-                total = sum(counts) or 1
-                y = [round(c / total * 100, 1) for c in counts]
-            else:
-                y = counts
-            x = vars_list
+                total = counts.sum() or 1
+                counts = (counts / total * 100).round(1)
+            x, y = counts.index.tolist(), counts.values.tolist()
             return go.Figure(data=[go.Bar(
                 x=x if not horizontal else y, y=y if not horizontal else x,
                 orientation=orient)])
         var = vars_list[0]
         if over_var:                                 # one trace per category
             ct = pd.crosstab(df[over_var], df[var], dropna=False)
+            ct = _released_counts(ct, drop=False)    # small cells -> gaps
             if as_pct:
                 ct = ct.div(ct.sum(axis=1), axis=0).multiply(100).round(1)
             fig = go.Figure()
             for col in ct.columns:
-                fig.add_trace(go.Bar(name=str(col), x=ct.index.tolist(), y=ct[col].values))
+                fig.add_trace(go.Bar(name=str(col), x=ct.index.tolist(), y=ct[col].values.tolist()))
             fig.update_layout(barmode=barmode)
             return fig
-        s = df[var].value_counts(dropna=False).sort_index()
+        s = _released_counts(df[var].value_counts(dropna=False).sort_index())
         if as_pct:
             s = (s / s.sum() * 100).round(1)
-        labels, vals = s.index.tolist(), s.values
+        labels, vals = s.index.tolist(), s.values.tolist()
         x, y = (labels, vals) if not horizontal else (vals, labels)
         return go.Figure(data=[go.Bar(x=x, y=y, orientation=orient)])
 
@@ -648,17 +702,24 @@ def barchart(df, vars, stat="count", over=None, horizontal=False, stack=False):
             fig = go.Figure()
             for v in vars_list:
                 grp = df.groupby(over_var, dropna=False)[v].agg(agg)
-                fig.add_trace(go.Bar(name=v, x=grp.index.tolist(), y=grp.values))
+                grp = _released_values(grp, df.groupby(over_var, dropna=False)[v].count())
+                fig.add_trace(go.Bar(name=v, x=grp.index.tolist(), y=grp.values.tolist()))
             fig.update_layout(barmode=barmode)
             return fig
+        vals = _released_values(
+            pd.Series([df[v].agg(agg) for v in vars_list], index=vars_list),
+            pd.Series([int(df[v].count()) for v in vars_list], index=vars_list))
         return go.Figure(data=[go.Bar(
-            x=vars_list, y=[df[v].agg(agg) for v in vars_list], orientation=orient)])
+            x=vars_list, y=vals.values.tolist(), orientation=orient)])
     var = vars_list[0]
     if over_var:
         grp = df.groupby(over_var, dropna=False)[var].agg(agg)
-        x, y = grp.index.tolist(), grp.values
+        grp = _released_values(grp, df.groupby(over_var, dropna=False)[var].count())
+        x, y = grp.index.tolist(), grp.values.tolist()
     else:
-        x, y = [var], [df[var].agg(agg)]
+        vals = _released_values(pd.Series([df[var].agg(agg)], index=[var]),
+                                pd.Series([int(df[var].count())], index=[var]))
+        x, y = [var], vals.values.tolist()
     return go.Figure(data=[go.Bar(x=x, y=y, orientation=orient)])
 
 
@@ -702,7 +763,7 @@ def piechart(df, vars, stat="count"):
     """Pie chart of ``vars[0]`` value counts, or percents with the ``(percent)``
     statistic. Mirrors the emulator."""
     import plotly.graph_objects as go
-    s = df[vars[0]].value_counts(dropna=False).sort_index()
+    s = _released_counts(df[vars[0]].value_counts(dropna=False).sort_index())
     if stat == "percent":
         values = (s / s.sum() * 100).round(1).tolist()
     else:
@@ -853,14 +914,27 @@ def probit_predict(df, dep, indep, predicted=None, probabilities=None, residuals
 
 def _coef_table(model):
     """Tidy coefficient table ``[term, coef, se, t, p]`` (``t`` is the z-statistic
-    for non-OLS models — statsmodels stores it as ``tvalues``)."""
-    return pd.DataFrame({
+    for non-OLS models — statsmodels stores it as ``tvalues``). Under an active
+    release spec, coefficients whose design-matrix column has fewer than min_n
+    nonzero entries are masked (a thin dummy's coefficient ≈ a small group's
+    mean); no readable design matrix ⇒ fail closed (all masked)."""
+    out = pd.DataFrame({
         "term": list(model.params.index),
         "coef": model.params.to_numpy(),
         "se": model.bse.to_numpy(),
         "t": model.tvalues.to_numpy(),
         "p": model.pvalues.to_numpy(),
     })
+    spec = get_release_spec()
+    if spec:
+        stat_cols = ["coef", "se", "t", "p"]
+        exog = getattr(getattr(model, "model", None), "exog", None)
+        if exog is None:
+            out[stat_cols] = np.nan
+        else:
+            at_risk = (np.asarray(exog) != 0).sum(axis=0)
+            out.loc[at_risk < spec.get("min_n", 5), stat_cols] = np.nan
+    return out
 
 
 def regress(df, dep, indep, noconstant=False):
@@ -911,7 +985,13 @@ def mlogit(df, dep, indep, noconstant=False):
             rows.append({"category": cat, "term": term,
                          "coef": params.iloc[ti, j], "se": se.iloc[ti, j],
                          "t": t.iloc[ti, j], "p": p.iloc[ti, j]})
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    spec = get_release_spec()
+    if spec:
+        at_risk = dict(zip(params.index, (X.to_numpy() != 0).sum(axis=0)))
+        thin = out["term"].map(at_risk).fillna(0) < spec.get("min_n", 5)
+        out.loc[thin, ["coef", "se", "t", "p"]] = np.nan
+    return out
 
 
 def rdd(df, dep, runvar, exog=(), cutoff=0.0, polynomial=1, fuzzy=None):

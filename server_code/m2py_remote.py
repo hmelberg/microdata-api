@@ -94,14 +94,43 @@ def run_remote(script, *, datasets, backend="pandas", policy=None, raw=False):
                     "figs": [], "results": [], "datasetInfo": {}}
     code = _mt.translate(script, backend=backend, source_path=None,
                          allow_emulated=False, print_results=raw)
-    ns = {"datasets": dict(datasets)}
+    datasets = dict(datasets)
+    pre = (policy or {}).get("pre_recipe")
+    if pre and pre.get("profile"):
+        # Sensitive data: input-side protection recipe applied to every frame
+        # BEFORE any script code sees it (microdata_no = Tiltak-1 population
+        # floor + winsorize numerics). A failed floor is a clean refusal.
+        try:
+            import pandas as _pd
+            import protect as _p
+            from m2py import _get_df_key_col
+            treated = {}
+            for k, v in datasets.items():
+                unit = _get_df_key_col(v)
+                vv = v if unit else v.assign(_unit_tmp=range(len(v)))
+                unit = unit or "_unit_tmp"
+                wins = [c for c in vv.columns
+                        if c != unit and _pd.api.types.is_numeric_dtype(vv[c])]
+                vv, _log = _p.profile(vv, pre["profile"], unit_id=unit,
+                                      winsorize_cols=wins)
+                treated[k] = vv.drop(columns=["_unit_tmp"], errors="ignore")
+            datasets = treated
+        except Exception as exc:
+            return {"code": "", "out": "", "html": "", "n": None,
+                    "err": "Personvern (inndata-tiltak): " + str(exc),
+                    "figs": [], "results": [], "datasetInfo": {}}
+    ns = {"datasets": datasets}
     buf = io.StringIO()
     err = None
+    from m2py_runtime import pandas_ops as _ops
+    _ops.set_release_spec((policy or {}).get("post_suppress"))
     try:
         with contextlib.redirect_stdout(buf):
             exec(code, ns)
     except Exception as exc:
         err = repr(exc)
+    finally:
+        _ops.set_release_spec(None)
 
     adapter = PandasProtect()
     spec = (policy or {}).get("post_suppress")
