@@ -163,16 +163,18 @@ def _leaf_html(kind, payload):
     if ptype == "series":
         name = payload.get("name") or "value"
         rows = list(zip(payload.get("index") or [], payload.get("values") or []))
-        return _table(["", name], rows)
+        return _table([payload.get("index_name") or "", name], rows)
     if ptype == "frame":
         cols = payload.get("columns") or []
         index = payload.get("index") or []
         data = payload.get("data") or []
-        # A plain 0..n-1 counter index carries no information — hide it.
-        if list(index) == list(range(len(data))):
+        # An unnamed plain 0..n-1 counter index carries no information — hide
+        # it. Payload indexes arrive stringified, so compare as strings.
+        if (not payload.get("index_name")
+                and [str(i) for i in index] == [str(i) for i in range(len(data))]):
             return _table(cols, data)
         rows = [[ix] + list(r) for ix, r in zip(index, data)]
-        return _table([""] + cols, rows)
+        return _table([payload.get("index_name") or ""] + cols, rows)
     if ptype == "scalar":
         label = payload.get("stat") or payload.get("name") or "value"
         return f"<pre>{_esc(label)}: {_cell(payload.get('value'))}</pre>"
