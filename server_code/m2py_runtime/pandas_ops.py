@@ -68,6 +68,48 @@ def _released_values(values, counts):
     return p.suppress(values, counts=counts, min_n=spec.get("min_n", 5))
 
 
+def _mask_thin_terms(out, design, stat_cols=("coef", "se", "t", "p")):
+    """Coefficient-table release rule: mask the stats of every term whose
+    design-matrix column has fewer than min_n nonzero entries (a thin dummy's
+    coefficient is close to a small group's mean). ``design`` is a DataFrame
+    whose column names match ``out['term']``; None ⇒ fail closed (all masked).
+    No-op without an active release spec."""
+    spec = get_release_spec()
+    if not spec:
+        return out
+    cols = [c for c in stat_cols if c in out.columns]
+    if design is None:
+        out[cols] = np.nan
+        return out
+    at_risk = {str(c): int((pd.Series(design[c]).to_numpy() != 0).sum())
+               for c in design.columns}
+    # terms without a design column (e.g. negbin's alpha) are model-level
+    # parameters over all rows — treat as full-n, not thin
+    thin = out["term"].astype(str).map(at_risk).fillna(len(design)) < spec.get("min_n", 5)
+    out.loc[thin, cols] = np.nan
+    return out
+
+
+def _released_extremes(s, spec):
+    """Order-stat rule for a numeric Series: its min/max may be released only
+    when at least min_n observations sit AT the extreme value (otherwise the
+    extreme is one identifiable unit's value). Returns (min, max) with np.nan
+    where refused."""
+    min_n = spec.get("min_n", 5)
+    lo, hi = s.min(), s.max()
+    lo_ok = (s == lo).sum() >= min_n
+    hi_ok = (s == hi).sum() >= min_n
+    return (lo if lo_ok else np.nan), (hi if hi_ok else np.nan)
+
+
+def _coarsen_sig(v, sig):
+    """Round to ``sig`` significant digits (Tiltak 8 percentile coarsening)."""
+    if v is None or (isinstance(v, float) and not np.isfinite(v)) or v == 0:
+        return v
+    from math import floor, log10
+    return round(v, -int(floor(log10(abs(v)))) + (sig - 1))
+
+
 # ── value-producing verbs ────────────────────────────────────────────────────
 
 def _normalize_expr(expression):
@@ -359,22 +401,31 @@ def summarize(df, vars=None, by=None, gini=False, iqr=False):
     append columns in either path. Analysis result; the dataset is unchanged."""
     vars = _numeric_vars(df, vars)
 
+    spec = get_release_spec()
     if by and by in df.columns:
         recs = []
         for key, sub in df.groupby(by, dropna=False):
             for v in vars:
                 s = sub[v]
+                if spec:      # min/max are individual values: order-stat rule
+                    lo, hi = _released_extremes(s.dropna(), spec)
+                else:
+                    lo, hi = s.min(), s.max()
                 r = {by: key, "variable": v, "mean": s.mean(), "std": s.std(),
-                     "min": s.min(), "max": s.max(), "count": s.count()}
+                     "min": lo, "max": hi, "count": s.count()}
                 r.update(_extra_stat_cols(s, gini, iqr))
                 recs.append(r)
         return pd.DataFrame(recs)
 
+    sig = spec.get("percentile_sig_figs") if spec else None
     recs = []
     for v in vars:
         s = df[v]
         r = {"variable": v, "mean": s.mean(), "std": s.std(), "count": s.count()}
-        r.update({label: s.quantile(q) for label, q in _SUM_PCTLS})
+        # Tiltak 8: percentiles coarsened to sig figs (p1/p99 sit next to an
+        # identifiable unit's value at full precision)
+        r.update({label: (_coarsen_sig(s.quantile(q), sig) if sig else s.quantile(q))
+                  for label, q in _SUM_PCTLS})
         r.update(_extra_stat_cols(s, gini, iqr))
         recs.append(r)
     return pd.DataFrame(recs)
@@ -485,12 +536,17 @@ def summarize_panel(df, vars=None, gini=False, iqr=False):
     if "tid" not in df.columns:
         raise ValueError("summarize-panel requires a 'tid' column")
     vars = [v for v in _numeric_vars(df, vars) if v != "tid"]
+    spec = get_release_spec()
     recs = []
     for tid_val, sub in df.groupby("tid"):
         for v in vars:
             s = sub[v]
+            if spec:          # min/max are individual values: order-stat rule
+                lo, hi = _released_extremes(s.dropna(), spec)
+            else:
+                lo, hi = s.min(), s.max()
             r = {"tid": tid_val, "variable": v, "mean": s.mean(), "std": s.std(),
-                 "min": s.min(), "max": s.max(), "count": s.count()}
+                 "min": lo, "max": hi, "count": s.count()}
             r.update(_extra_stat_cols(s, gini, iqr))
             recs.append(r)
     return pd.DataFrame(recs)
@@ -630,10 +686,24 @@ def histogram(df, vars, bins=30, discrete=False, percent=False, density=False,
     var = vars[0]
     s = df[var].dropna()
     if discrete or not pd.api.types.is_numeric_dtype(s):
-        vc = s.value_counts().sort_index()
+        vc = _released_counts(s.value_counts().sort_index())
         if percent:
             vc = (vc / vc.sum() * 100).round(2)
         return px.bar(x=vc.index.tolist(), y=vc.values.tolist())
+    spec = get_release_spec()
+    if spec:
+        # compute-to-data: px.histogram embeds the raw column in the figure
+        # JSON, so pre-bin server-side and release suppressed bin counts only
+        import numpy as np  # rebind: the `normal` branch below shadows the global
+        counts, edges = np.histogram(s, bins=bins)
+        centers = ((edges[:-1] + edges[1:]) / 2).tolist()
+        bc = _released_counts(pd.Series(counts, index=centers))
+        if percent:
+            bc = (bc / bc.sum() * 100).round(2)
+        elif density:
+            width = float(edges[1] - edges[0]) or 1.0
+            bc = bc / (bc.sum() * width)
+        return go.Figure(data=[go.Bar(x=bc.index.tolist(), y=bc.values.tolist())])
     histnorm = "probability density" if density else ("percent" if percent else None)
     fig = px.histogram(df.dropna(subset=[var]), x=var, nbins=bins, histnorm=histnorm)
     if normal:
@@ -925,16 +995,14 @@ def _coef_table(model):
         "t": model.tvalues.to_numpy(),
         "p": model.pvalues.to_numpy(),
     })
-    spec = get_release_spec()
-    if spec:
-        stat_cols = ["coef", "se", "t", "p"]
-        exog = getattr(getattr(model, "model", None), "exog", None)
-        if exog is None:
-            out[stat_cols] = np.nan
-        else:
-            at_risk = (np.asarray(exog) != 0).sum(axis=0)
-            out.loc[at_risk < spec.get("min_n", 5), stat_cols] = np.nan
-    return out
+    exog = getattr(getattr(model, "model", None), "exog", None)
+    design = None
+    if exog is not None:
+        arr = np.asarray(exog)
+        # negbin appends a dispersion param (alpha) to params with no design
+        # column — align on the design width; extra params count as full-n
+        design = pd.DataFrame(arr, columns=list(model.params.index)[: arr.shape[1]])
+    return _mask_thin_terms(out, design)
 
 
 def regress(df, dep, indep, noconstant=False):
@@ -985,13 +1053,7 @@ def mlogit(df, dep, indep, noconstant=False):
             rows.append({"category": cat, "term": term,
                          "coef": params.iloc[ti, j], "se": se.iloc[ti, j],
                          "t": t.iloc[ti, j], "p": p.iloc[ti, j]})
-    out = pd.DataFrame(rows)
-    spec = get_release_spec()
-    if spec:
-        at_risk = dict(zip(params.index, (X.to_numpy() != 0).sum(axis=0)))
-        thin = out["term"].map(at_risk).fillna(0) < spec.get("min_n", 5)
-        out.loc[thin, ["coef", "se", "t", "p"]] = np.nan
-    return out
+    return _mask_thin_terms(pd.DataFrame(rows), X)
 
 
 def rdd(df, dep, runvar, exog=(), cutoff=0.0, polynomial=1, fuzzy=None):
@@ -1122,13 +1184,14 @@ def regress_panel(df, dep, indep, effect="fe", key=None):
         model = BetweenOLS(Y, X).fit()
     else:
         model = PanelOLS(Y, X, entity_effects=True, drop_absorbed=True).fit()
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "term": list(model.params.index),
         "coef": model.params.to_numpy(),
         "se": model.std_errors.to_numpy(),
         "t": model.tstats.to_numpy(),
         "p": model.pvalues.to_numpy(),
     })
+    return _mask_thin_terms(out, X[list(model.params.index)])
 
 
 def _iv_fit(df, dep, exog, endog, instruments):
@@ -1209,13 +1272,17 @@ def ivregress(df, dep, exog, endog, instruments):
     2SLS standard errors. Returns the second-stage coefficient table
     ``[term, coef, se, t, p]``."""
     robust, terms, _, _, _ = _iv_fit(df, dep, exog, endog, instruments)
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "term": terms,
         "coef": np.asarray(robust.params),
         "se": np.asarray(robust.bse),
         "t": np.asarray(robust.tvalues),
         "p": np.asarray(robust.pvalues),
     })
+    rexog = getattr(getattr(robust, "model", None), "exog", None)
+    design = (pd.DataFrame(np.asarray(rexog), columns=terms)
+              if rexog is not None else None)
+    return _mask_thin_terms(out, design)
 
 
 def ivregress_predict(df, dep, exog, endog, instruments, predicted="predicted",
@@ -1255,7 +1322,7 @@ def cox(df, event, duration, covars=(), level=95):
     cph = CoxPHFitter(alpha=1 - level / 100)
     cph.fit(sub, duration_col=duration, event_col=event)
     s = cph.summary
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "term": list(s.index),
         "coef": s["coef"].to_numpy(),
         "hazard_ratio": s["exp(coef)"].to_numpy(),
@@ -1263,6 +1330,9 @@ def cox(df, event, duration, covars=(), level=95):
         "z": s["z"].to_numpy(),
         "p": s["p"].to_numpy(),
     })
+    covar_cols = [c for c in sub.columns if c not in (event, duration)]
+    return _mask_thin_terms(out, sub[covar_cols],
+                            stat_cols=("coef", "hazard_ratio", "se", "z", "p"))
 
 
 def kaplan_meier(df, event, duration):
@@ -1274,6 +1344,13 @@ def kaplan_meier(df, event, duration):
     kmf.fit(sub[duration], sub[event])
     out = kmf.survival_function_.reset_index()
     out.columns = ["time", "survival"]
+    spec = get_release_spec()
+    if spec:
+        # release the curve only while >= min_n units remain at risk — the
+        # tail steps are individual event times over a near-empty risk set
+        min_n = spec.get("min_n", 5)
+        at_risk = out["time"].map(lambda t: int((sub[duration] >= t).sum()))
+        out = out[at_risk >= min_n].reset_index(drop=True)
     return out
 
 
@@ -1308,6 +1385,18 @@ def coefplot(df, reg_cmd, dep, indep, standardize=False, noconstant=False):
     model = _fit_model(df, reg_cmd, dep, indep, noconstant, standardize)
     params = model.params.drop("const", errors="ignore")
     ci = model.conf_int().drop("const", errors="ignore")
+    spec = get_release_spec()
+    if spec:
+        # same thin-term rule as the coefficient tables — a plot must not
+        # reveal what the table masks. Fail closed without a design matrix.
+        exog = getattr(getattr(model, "model", None), "exog", None)
+        if exog is None:
+            params, ci = params.iloc[:0], ci.iloc[:0]
+        else:
+            design = pd.DataFrame(np.asarray(exog), columns=list(model.params.index))
+            at_risk = (design[params.index] != 0).sum()
+            keep = at_risk[at_risk >= spec.get("min_n", 5)].index
+            params, ci = params[keep], ci.loc[keep]
     coefs = params.values.tolist()
     lo, hi = ci.iloc[:, 0].tolist(), ci.iloc[:, 1].tolist()
     err_minus = [c - l for c, l in zip(coefs, lo)]

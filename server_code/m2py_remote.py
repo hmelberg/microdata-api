@@ -64,8 +64,10 @@ def _dataset_info(ns):
 
 
 # Plot verbs whose plotly JSON embeds row-level values (scatter/box points,
-# px.histogram raw x, per-row sankey transitions) — refused on non-public data.
-_RAW_PLOT_VERBS = ("scatter", "hexbin", "sankey", "boxplot", "histogram")
+# per-row sankey transitions) — refused on non-public data. histogram is NOT
+# here: under an active release spec the op pre-bins server-side and releases
+# suppressed bin counts only.
+_RAW_PLOT_VERBS = ("scatter", "hexbin", "sankey", "boxplot")
 
 
 def _raw_plot_verbs_used(script):

@@ -29,13 +29,15 @@ _ORDER = {PUBLIC: 0, PROTECTED: 1, SENSITIVE: 2}
 # MUST mirror safepy/policy.py PRESETS ("standard" -> protected, "microdata"
 # -> sensitive). Only used when safepy is not importable.
 _FALLBACK = {
-    PROTECTED: {"min_n": 5, "round": 10},
-    SENSITIVE: {"min_n": 5, "round": 10},
+    PROTECTED: {"min_n": 5, "round": 10, "percentile_sig_figs": 3,
+                "max_low_cell_share": 0.5},
+    SENSITIVE: {"min_n": 5, "round": 10, "percentile_sig_figs": 3,
+                "max_low_cell_share": 0.5},
 }
 
 
 def _preset_for(level):
-    """min_n/round for a level, read from safepy's presets when available."""
+    """Suppression levers for a level, read from safepy's presets when available."""
     try:
         try:
             # Sets SAFEPY_NOISE_SALT from the Anvil secret BEFORE any safepy
@@ -45,7 +47,9 @@ def _preset_for(level):
             pass
         from safepy.policy import PRESETS, _LEVEL_PRESET
         s = PRESETS[_LEVEL_PRESET[level]]
-        return {"min_n": s.min_n, "round": s.round_to}
+        return {"min_n": s.min_n, "round": s.round_to,
+                "percentile_sig_figs": s.percentile_sig_figs,
+                "max_low_cell_share": s.max_low_cell_share}
     except Exception:
         return dict(_FALLBACK[level])
 
@@ -103,8 +107,17 @@ class PandasProtect:
             return result
         import protect as p
         min_n = spec.get("min_n", 5)
-        out = result.copy()
         counts = result[count_col]
+        # Tiltak 5, sparse-table stop: when most cells are below min_n the
+        # row LABELS alone enumerate raw values (e.g. tabulate of a nearly
+        # unique column) — refuse the whole table instead of releasing it.
+        low_share = spec.get("max_low_cell_share")
+        if (count_col == "n" and low_share is not None and len(counts) > 1
+                and (counts < min_n).mean() > low_share):
+            return ("Personvern: tabellen er for spredt (de fleste cellene har "
+                    f"færre enn {min_n} enheter) og frigis ikke. Grupper "
+                    "variabelen grovere (f.eks. med recode) og prøv igjen.")
+        out = result.copy()
         if count_col == "count":
             for c in out.columns:
                 if c == count_col or not pd.api.types.is_numeric_dtype(out[c]):
@@ -114,7 +127,29 @@ class PandasProtect:
             if c in out.columns:
                 out[c] = p.suppress(out[c], counts=counts, min_n=min_n, round=1)
         out[count_col] = p.suppress(counts, min_n=min_n, round=spec.get("round"))
+        if spec.get("secondary") and count_col == "n":
+            out = self._secondary_two_way(out, result)
         return out
+
+    def _secondary_two_way(self, out, original):
+        """Secondary suppression for two-way tabulate frames (long format,
+        two key columns + n): pivot, run protect's greedy secondary pass so
+        marginals can't recover a lone suppressed cell, and map the extra
+        NaNs back onto the long frame. No-op for one-way/other shapes."""
+        try:
+            import protect as p
+            keys = [c for c in out.columns
+                    if c != "n" and c not in self._PCT_COLS
+                    and not c.startswith("chi2")]
+            if len(keys) != 2:
+                return out
+            pivot = out.pivot(index=keys[0], columns=keys[1], values="n")
+            masked = p.suppress(pivot, secondary=True)
+            long = masked.stack(dropna=False).rename("n").reset_index()
+            merged = out.drop(columns=["n"]).merge(long, on=keys, how="left")
+            return merged[list(out.columns)]
+        except Exception:
+            return out
 
     def _suppress_model(self, result, spec):
         """statsmodels-style results: per-coefficient at-risk suppression.
