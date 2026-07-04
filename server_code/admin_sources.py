@@ -22,7 +22,7 @@ from anvil import BlobMedia
 from anvil.tables import app_tables
 
 VALID_KINDS = {"url", "media"}
-VALID_FORMATS = {"csv", "parquet"}
+VALID_FORMATS = {"csv", "parquet", "he"}   # "he" = safepy-he-v1 encrypted artifact
 VALID_LEVELS = {"public", "protected", "sensitive"}
 VALID_EXEC = {"local", "remote", "strict_remote"}
 
@@ -110,6 +110,50 @@ def _validate_fields(fields: dict) -> dict:
     }
 
 
+def _validate_he_source(f, media, encrypted, he_key_json, existing_row):
+    """Plane B registration: parse the safepy-he-v1 artifact (uploaded media or
+    fetched from the URL), record its content fingerprint, and store the
+    authority private key Fernet-encrypted. The key must match the artifact's
+    public modulus; on update the existing key is kept if none is supplied.
+    The raw key JSON never touches the row or the audit log."""
+    import json
+    from source_registry import _raw_bytes
+    from safepy import he
+
+    probe = {"kind": f["kind"], "file": media, "location": f["location"],
+             "format": "he", "encrypted": encrypted, "source_id": f["source_id"]}
+    if f["kind"] == "media" and media is None and existing_row is not None:
+        probe["file"] = existing_row["file"]
+        probe["encrypted"] = bool(_cell(existing_row, "encrypted", False))
+    try:
+        ds = json.loads(_raw_bytes(probe).decode("utf-8"))
+    except Exception:
+        raise ValueError("kunne ikke lese kilden som en safepy-he-v1 JSON-artefakt")
+    if not isinstance(ds, dict) or ds.get("format") != "safepy-he-v1":
+        raise ValueError("format=he krever en safepy-he-v1-artefakt "
+                         f"(fant: {ds.get('format') if isinstance(ds, dict) else 'ikke-JSON'})")
+
+    if he_key_json:
+        try:
+            key_dict = json.loads(he_key_json)
+            priv = he.load_private_key(key_dict)
+        except Exception:
+            raise ValueError("he_private_key må være gyldig nøkkel-JSON ({p, q, n} hex)")
+        if format(priv.public_key.n, "x") != ds["public_key"]["n"]:
+            raise ValueError("he_private_key hører ikke til denne artefaktens "
+                             "offentlige nøkkel (modulus stemmer ikke)")
+        from media_crypto import encrypt_bytes
+        stored_key = encrypt_bytes(he_key_json.encode("utf-8")).decode("ascii")
+    elif existing_row is not None and _cell(existing_row, "he_key"):
+        stored_key = existing_row["he_key"]        # update without re-supplying
+    else:
+        raise ValueError("ny he-kilde krever he_private_key (autoritetsnøkkelen)")
+
+    return {"fingerprint": he.dataset_fingerprint(ds),
+            "he_key": stored_key,
+            "nrows": int(ds.get("n_rows") or 0)}
+
+
 @anvil.server.callable
 def admin_save_source(fields: dict, file=None):
     """Create or update a source (matched on source_id). For kind=media with a
@@ -134,18 +178,26 @@ def admin_save_source(fields: dict, file=None):
             stored = encrypt_bytes(raw)
         name = getattr(file, "name", None) or f"{f['source_id']}.{f['format']}"
         media = BlobMedia("application/octet-stream", stored, name=name)
-        # Validate through the REAL read path (incl. decryption) before saving.
-        from source_registry import load_dataframe
-        df = load_dataframe({"kind": "media", "file": media,
-                             "format": f["format"], "encrypted": encrypted})
-        if df is None or len(df.columns) == 0:
-            raise ValueError("kunne ikke lese filen som " + f["format"])
-        nrows = int(len(df))
+        if f["format"] != "he":
+            # Validate through the REAL read path (incl. decryption) before saving.
+            from source_registry import load_dataframe
+            df = load_dataframe({"kind": "media", "file": media,
+                                 "format": f["format"], "encrypted": encrypted})
+            if df is None or len(df.columns) == 0:
+                raise ValueError("kunne ikke lese filen som " + f["format"])
+            nrows = int(len(df))
+
+    he_values = {}
+    if f["format"] == "he":
+        existing = app_tables.sources.get(source_id=f["source_id"])
+        he_values = _validate_he_source(
+            f, media, encrypted, (fields or {}).get("he_private_key"), existing)
+        nrows = he_values.pop("nrows")
 
     row = app_tables.sources.get(source_id=f["source_id"])
     now = _utcnow()
     values = dict(f, status="active", updated=now,
-                  owner_email=user["email"])
+                  owner_email=user["email"], **he_values)
     if media is not None:
         values["file"] = media
         values["encrypted"] = encrypted

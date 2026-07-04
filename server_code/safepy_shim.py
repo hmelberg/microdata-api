@@ -27,10 +27,10 @@ try:
 except Exception:
     pass  # non-Anvil test run; prod MUST configure the safepy_noise_salt secret
 
-SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb"}
+SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb", "he"}
 
 # Dialects that need an optional third-party engine on the server.
-_DIALECT_DEPS = {"polars": "polars", "duckdb": "duckdb"}
+_DIALECT_DEPS = {"polars": "polars", "duckdb": "duckdb", "he": "phe"}
 
 _LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
 
@@ -50,7 +50,7 @@ def run_extended(script, sources_req, dialect="pandas"):
                 script, f"dialect '{dialect}' er ikke tilgjengelig på serveren "
                         f"(mangler pakken '{dep}')")
 
-    from source_registry import resolve_source, load_dataframe
+    from source_registry import resolve_source, load_dataframe, load_encrypted_source
 
     frames, level = {}, "public"
     for s in sources_req or []:
@@ -61,7 +61,18 @@ def run_extended(script, sources_req, dialect="pandas"):
             src = resolve_source(sid)
         except KeyError:
             return _error_shape(script, f"ukjent kilde: {sid}")
-        frames[alias] = load_dataframe(src)
+        # HE sources (format="he", Plane B) never decrypt to a frame: the 'he'
+        # dialect carries them as EncryptedSource, and only that dialect may.
+        if dialect == "he":
+            if (src.get("format") or "") != "he":
+                return _error_shape(
+                    script, f"kilden '{sid}' er ikke en kryptert (he) kilde")
+            frames[alias] = load_encrypted_source(src)
+        elif (src.get("format") or "") == "he":
+            return _error_shape(
+                script, f"kilden '{sid}' er kryptert — bruk dialekten 'he'")
+        else:
+            frames[alias] = load_dataframe(src)
         if _LEVEL_ORDER.get(src["level"], 1) > _LEVEL_ORDER[level]:
             level = src["level"]
 

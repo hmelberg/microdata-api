@@ -10,6 +10,12 @@ fresh install keep working.
 Future seam: kind="encrypted_url" — location points at encrypted bytes (e.g. a
 GitHub repo) and the request carries a per-run decryption key that is used in
 memory and never stored.
+
+format="he" (Plane B, safepy homomorphic-release design): the source is a
+Paillier-encrypted JSON artifact (safepy-he-v1) that may live at any URL — the
+host needs zero trust. `load_encrypted_source` fingerprint-checks it against
+the registered hash and pairs it with the authority private key stored
+Fernet-encrypted on the row (`he_key`).
 """
 from __future__ import annotations
 
@@ -57,6 +63,8 @@ def _row_to_source(row) -> dict:
         "default_exec": row["default_exec"]
             or ("local" if level == "public" else "remote"),
         "encrypted": bool(_cell(row, "encrypted", False)),
+        "fingerprint": _cell(row, "fingerprint"),
+        "he_key": _cell(row, "he_key"),
         "status": "active",
     }
 
@@ -100,3 +108,39 @@ def load_dataframe(src: dict):
         return pd.read_parquet(buf) if fmt == "parquet" else pd.read_csv(buf)
     from m2py_runtime.sources import read_source
     return read_source(src["location"], src.get("format"))
+
+
+def _raw_bytes(src: dict) -> bytes:
+    """Raw bytes of a source (media or url), at-rest-decrypted when flagged."""
+    if src.get("kind") == "media" and src.get("file") is not None:
+        data = src["file"].get_bytes()
+        if src.get("encrypted"):
+            from media_crypto import decrypt_bytes
+            data = decrypt_bytes(data)   # plaintext exists only in memory
+        return data
+    import urllib.request
+    with urllib.request.urlopen(src["location"]) as resp:
+        return resp.read()
+
+
+def load_encrypted_source(src: dict):
+    """format="he" source dict -> safepy.he.EncryptedSource (dataset + key).
+
+    The artifact is fingerprint-checked against the registered hash, so a
+    swapped file (e.g. edited on GitHub) is refused. The authority private key
+    is Fernet-decrypted from the row and exists only in memory."""
+    import json
+    from safepy import he
+    ds = json.loads(_raw_bytes(src).decode("utf-8"))
+    want = src.get("fingerprint")
+    if want and he.dataset_fingerprint(ds) != want:
+        raise ValueError(
+            f"kilden {src.get('source_id')!r} matcher ikke registrert fingerprint "
+            f"— filen kan være byttet ut siden registrering")
+    enc_key = src.get("he_key")
+    if not enc_key:
+        raise ValueError(
+            f"kilden {src.get('source_id')!r} mangler autoritetsnøkkel (he_key)")
+    from media_crypto import decrypt_bytes
+    key_dict = json.loads(decrypt_bytes(enc_key.encode("ascii")).decode("utf-8"))
+    return he.EncryptedSource(ds, he.load_private_key(key_dict))

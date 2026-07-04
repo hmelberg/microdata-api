@@ -44,6 +44,12 @@ def _build_namespace(profile: Profile, policy: Policy, sources: dict[str, Any],
     ``SafeFrame``; ``polars`` wraps them in ``SafePolarsFrame`` (polars surface,
     pandas suppression backend — see polars_api).
     """
+    if dialect == "he":
+        # Encrypted sources (Plane B): the facade is the entire surface, in every
+        # profile — the raw EncryptedSource (which carries the key) is never
+        # exposed. Lazy import: the he module needs the optional 'phe' package.
+        from .he import build_he_namespace
+        return build_he_namespace(sources, policy)
     verbs = SafeVerbs(policy)
     if profile is Profile.STRICT and dialect == "polars":
         from .polars_api import SafePolarsFrame

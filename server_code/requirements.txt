@@ -9,3 +9,4 @@ plotly
 lifelines
 polars
 duckdb
+phe
