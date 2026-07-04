@@ -27,17 +27,19 @@ try:
 except Exception:
     pass  # non-Anvil test run; prod MUST configure the safepy_noise_salt secret
 
-SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb", "he", "r-he", "polars-he"}
+SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb", "he", "r-he", "polars-he",
+                   "duckdb-he"}
 
 # Dialects that need optional third-party engine(s) on the server (str or tuple).
 _DIALECT_DEPS = {"polars": "polars", "duckdb": "duckdb", "he": "phe",
-                 "r-he": "phe", "polars-he": ("polars", "phe")}
+                 "r-he": "phe", "polars-he": ("polars", "phe"),
+                 "duckdb-he": ("duckdb", "phe")}
 
 # Encrypted (format="he") sources force the homomorphic variant of the language:
-# a user picks Python/R/polars and just points at an encrypted source. duckdb-
-# over-encrypted is not built yet.
+# a user picks Python/R/polars/duckdb and just points at an encrypted source.
 _HE_VARIANT = {"pandas": "he", "he": "he", "r": "r-he", "r-he": "r-he",
-               "polars": "polars-he", "polars-he": "polars-he"}
+               "polars": "polars-he", "polars-he": "polars-he",
+               "duckdb": "duckdb-he", "duckdb-he": "duckdb-he"}
 
 _LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
 

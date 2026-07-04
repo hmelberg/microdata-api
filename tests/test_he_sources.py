@@ -146,6 +146,18 @@ def test_shim_polars_dialect_autoroutes_encrypted(he_source, monkeypatch):
     assert out["audit"]["backend"] == "paillier"
 
 
+def test_shim_duckdb_dialect_autoroutes_encrypted(he_source, monkeypatch):
+    pytest.importorskip("duckdb")
+    _, src = he_source
+    _patch_registry(monkeypatch, src)
+    out = safepy_shim.run_extended(
+        "SELECT region, avg(salary) FROM df GROUP BY region",
+        [{"alias": "df", "source_id": "he_test"}], dialect="duckdb")
+    assert out["err"] is None
+    assert out["audit"]["dialect"] == "duckdb-he"
+    assert out["audit"]["backend"] == "paillier"
+
+
 def test_shim_encrypted_dialect_needs_encrypted_source(monkeypatch):
     plain = {"source_id": "p", "kind": "url", "location": "https://x/y.csv",
              "format": "csv", "level": "public", "status": "active"}

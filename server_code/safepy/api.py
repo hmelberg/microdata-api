@@ -104,6 +104,11 @@ def run(code: str,
         # executed) and routed to an HEAuthority via the ReleaseBackend. See r_he.
         return _run_r_he(code, sources, policy, active)
 
+    if dialect == "duckdb-he":
+        # SQL over encrypted data: duckdb parses (never executes); the GROUP BY +
+        # aggregate intent maps to an HEAuthority via the ReleaseBackend. See duckdb_he.
+        return _run_duckdb_he(code, sources, policy, active)
+
     try:
         namespace = _build_namespace(active, policy, sources, dialect)
         allowed_names = frozenset(namespace)
@@ -211,6 +216,30 @@ def _run_r_he(code: str, sources: dict, policy: Policy, active: Profile) -> Safe
         return SafeResult(ok=False, kind="error", error={
             "kind": "SandboxError",
             "message": f"your R code raised {type(exc).__name__} during translation"})
+
+
+def _run_duckdb_he(code: str, sources: dict, policy: Policy, active: Profile) -> SafeResult:
+    """Parse SQL over encrypted sources (never executed) and release through the
+    shared core. Mirrors _run_duckdb, but the backend is an HEAuthority (see
+    duckdb_he)."""
+    from .duckdb_he import translate_sql_he
+    try:
+        released = translate_sql_he(code, policy, sources)
+        res = mediate(released, policy)
+        res.audit.setdefault("level", policy.level.value)
+        res.audit.setdefault("profile", active.value)
+        res.audit.setdefault("dialect", "duckdb-he")
+        res.results = [res]
+        return res
+    except ValidationError as exc:
+        return SafeResult(ok=False, kind="error", error=exc.as_dict())
+    except (DisclosureError, SandboxError) as exc:
+        return SafeResult(ok=False, kind="error",
+                          error={"kind": type(exc).__name__, "message": str(exc)})
+    except BaseException as exc:  # noqa: BLE001 - sanitise: never leak a data value
+        return SafeResult(ok=False, kind="error", error={
+            "kind": "SandboxError",
+            "message": f"your SQL raised {type(exc).__name__} during translation"})
 
 
 def _run_duckdb(code: str, sources: dict, policy: Policy, active: Profile) -> SafeResult:
