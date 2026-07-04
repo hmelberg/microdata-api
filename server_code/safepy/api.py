@@ -50,6 +50,11 @@ def _build_namespace(profile: Profile, policy: Policy, sources: dict[str, Any],
         # exposed. Lazy import: the he module needs the optional 'phe' package.
         from .he import build_he_namespace
         return build_he_namespace(sources, policy)
+    if dialect == "polars-he":
+        # Polars idiom over encrypted data: a facade routing to the same
+        # HEAuthority (polars cannot run on ciphertext). See polars_he.
+        from .polars_he import build_he_polars_namespace
+        return build_he_polars_namespace(sources, policy)
     verbs = SafeVerbs(policy)
     if profile is Profile.STRICT and dialect == "polars":
         from .polars_api import SafePolarsFrame

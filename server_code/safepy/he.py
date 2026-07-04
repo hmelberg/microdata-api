@@ -509,8 +509,12 @@ class HEGroupBy:
     def std(self, value, **kw): return self._auth.group_agg(self._ds, self._by, value, "std", **kw)
 
     def size(self, **kw):
-        col = self._by if isinstance(self._by, str) else self._by[0]
-        return self._auth.group_agg(self._ds, self._by, col, "size", **kw)
+        # size counts rows per group; it never uses a value's ciphertext, but the
+        # authority needs a valid encrypted column as the count carrier.
+        value = next(iter(self._ds["value_columns"]), None)
+        if value is None:
+            raise DisclosureError("dataset has no encrypted value column to count over")
+        return self._auth.group_agg(self._ds, self._by, value, "size", **kw)
 
 
 class HEFrame:
