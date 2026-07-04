@@ -18,6 +18,252 @@ def _is_disclosure_control():
     v = globals().get('M2PY_DISCLOSURE_CONTROL', '0')
     return v in (True, 1, '1', 'true', 'True', 'yes', 'on')
 
+# ─────────────────────────────────────────────────────────────────────────────
+# UI-språk for meldinger. Settes fra JS (som M2PY_DISCLOSURE_CONTROL); norsk
+# tekst er selve nøkkelen — mangler en oversettelse vises norsk, ingenting
+# knekker. _t() med kwargs bruker {navn}-plassholdere (str.format).
+# ─────────────────────────────────────────────────────────────────────────────
+M2PY_LANG = 'no'
+
+def _t(s, **kw):
+    if globals().get('M2PY_LANG') == 'en':
+        s = _M2PY_MESSAGES_EN.get(s, s)
+    return s.format(**kw) if kw else s
+
+_M2PY_MESSAGES_EN = {
+    # --- BEGIN engelsk meldingskatalog (norsk nøkkel -> engelsk) ---
+    "manglende 'in' i for-nivå: '{level_str}'": "missing 'in' in for-level: '{level_str}'",
+    "for-løkke mangler iteratornavn": "for-loop is missing an iterator name",
+    "parentes rundt iterator-listen er ikke gyldig i "
+    "microdata.no. Skriv f.eks. `for y in 1998:2009` eller "
+    "`for y in 1998, 1999, 2000` (uten parens).":
+        "parentheses around the iterator list are not valid in "
+        "microdata.no. Write e.g. `for y in 1998:2009` or "
+        "`for y in 1998, 1999, 2000` (without parentheses).",
+    "ellipsis `...` er ikke gyldig i for-løkker i "
+    "microdata.no. Bruk range-syntax: f.eks. `for y in 1998 : 2009`.":
+        "ellipsis `...` is not valid in for-loops in "
+        "microdata.no. Use range syntax: e.g. `for y in 1998 : 2009`.",
+    "for-nivå '{vars_str}': {n_vars} "
+    "iteratorer men {n_lists} verdilister":
+        "for-level '{vars_str}': {n_vars} "
+        "iterators but {n_lists} value lists",
+    "for-nivå '{vars_str}': verdilistene må ha "
+    "samme lengde ({lengths})":
+        "for-level '{vars_str}': the value lists must have "
+        "the same length ({lengths})",
+    "sep må være '&' eller '|'": "sep must be '&' or '|'",
+    "Sammenligning med `.` (Stata-syntaks som `x == .`) er ikke "
+    "gyldig i microdata.no. Bruk `sysmiss(x)` for å teste om en "
+    "verdi er missing (f.eks. `drop if sysmiss(x)`). "
+    "Tildeling med `= .` (f.eks. `generate x = .`) er OK.":
+        "Comparison with `.` (Stata syntax like `x == .`) is not "
+        "valid in microdata.no. Use `sysmiss(x)` to test whether a "
+        "value is missing (e.g. `drop if sysmiss(x)`). "
+        "Assignment with `= .` (e.g. `generate x = .`) is OK.",
+    "Tomt uttrykk i generate.": "Empty expression in generate.",
+    # --- BEGIN lines 3000-6000 additions ---
+    'Andre trinn (avhengig: {dep}):': 'Second stage (dependent: {dep}):',
+    'Antall': 'Count',
+    'Båndbredde (h): venstre={left}, høyre={right}': 'Bandwidth (h): left={left}, right={right}',
+    'Differanse koeff (FE-RE): chi2={chi2}, P={pval}': 'Coefficient difference (FE-RE): chi2={chi2}, P={pval}',
+    'Differanse koeff: {diff_dict}\nchi2={chi2}, P={pval}': 'Coefficient difference: {diff_dict}\nchi2={chi2}, P={pval}',
+    'Diskontinuitet': 'Discontinuity',
+    'Estimat': 'Estimate',
+    "Faktorvariabel '{base}' finnes ikke i datasettet": "Factor variable '{base}' does not exist in the dataset",
+    "Fuzzy-variabel '{fuzzy_var}' finnes ikke i datasettet.": "Fuzzy variable '{fuzzy_var}' does not exist in the dataset.",
+    'Første trinn ({ev}): F={f_stat}, R²={rsquared}': 'First stage ({ev}): F={f_stat}, R²={rsquared}',
+    'Første trinn F-stat: {f_stat}\n': 'First stage F-stat: {f_stat}\n',
+    'Gj.snitt': 'Mean',
+    'Hausman (statsmodels) feilet: {err}\n': 'Hausman (statsmodels) failed: {err}\n',
+    'Hausman (statsmodels): kunne ikke aligne FE og RE-koeffisienter.\n': 'Hausman (statsmodels): could not align FE and RE coefficients.\n',
+    'Hausman feilet: {err}\n': 'Hausman failed: {err}\n',
+    'Ingen felles koeffisienter å sammenligne.': 'No common coefficients to compare.',
+    'Ingen observasjoner etter fjerning av manglende verdier.': 'No observations left after removing missing values.',
+    'Ingen observasjoner etter konvertering.': 'No observations left after conversion.',
+    'Ingen observasjoner etter numerisk konvertering — sjekk at avhengig og uavhengige variabler er tall.': 'No observations left after numeric conversion — check that the dependent and independent variables are numeric.',
+    'Instrumentvariabelregresjon ({method})': 'Instrumental-variable regression ({method})',
+    'KI nedre': 'CI lower',
+    'KI nedre {pct}%': 'CI lower {pct}%',
+    'KI øvre': 'CI upper',
+    'KI øvre {pct}%': 'CI upper {pct}%',
+    "Kodeliste '{codelist_name}' er ikke definert. Bruk define-labels først.": "Code list '{codelist_name}' is not defined. Use define-labels first.",
+    "Kodeliste eller variabel '{codelist_or_var}' ikke funnet.": "Code list or variable '{codelist_or_var}' not found.",
+    'Kodeliste {codelist_or_var}:': 'Code list {codelist_or_var}:',
+    'Kolonner {missing} finnes ikke i datasettet. collapse erstatter data med aggregert resultat; bruk én collapse med alle (stat) var -> navn i samme kommando, f.eks. collapse (mean) inntekt -> snitt (count) inntekt -> antall, by(kommune)': 'Columns {missing} do not exist in the dataset. collapse replaces the data with the aggregated result; use a single collapse with all (stat) var -> name in the same command, e.g. collapse (mean) inntekt -> snitt (count) inntekt -> antall, by(kommune)',
+    'Modell: logit (odds ratios)': 'Model: logit (odds ratios)',
+    'Modell: negative-binomial (incidence rate ratios)': 'Model: negative-binomial (incidence rate ratios)',
+    'Modell: poisson (incidence rate ratios)': 'Model: poisson (incidence rate ratios)',
+    'N: venstre={left}, høyre={right}': 'N: left={left}, right={right}',
+    'P<0.05 => bruk FE. P>=0.05 => bruk RE.\n': 'P<0.05 => use FE. P>=0.05 => use RE.\n',
+    'Polynomial-orden: {poly_order}': 'Polynomial order: {poly_order}',
+    'RDD (Regression Discontinuity Design)': 'RDD (Regression Discontinuity Design)',
+    'Std.avvik': 'Std. dev.',
+    'Std.feil': 'Std. error',
+    'Tabellen kan ikke vises pga. for mange små celler ({low_cells} av {total_cells} celler har frekvens <{low_cell}, dvs. {low_pct}% — grensen er {limit_pct}%). Reduser antall kategorier eller utvid populasjonen.': 'The table cannot be shown because too many cells are small ({low_cells} of {total_cells} cells have frequency <{low_cell}, i.e. {low_pct}% — the limit is {limit_pct}%). Reduce the number of categories or expand the population.',
+    'Ukjent overlevelseskommando: {cmd}': 'Unknown survival command: {cmd}',
+    'Ukjent regresjonskommando: {cmd}': 'Unknown regression command: {cmd}',
+    "Variabel '{base}' finnes ikke i datasettet": "Variable '{base}' does not exist in the dataset",
+    'Variabler ikke funnet i datasettet: {missing}': 'Variables not found in the dataset: {missing}',
+    'Variabler ikke funnet: {missing}': 'Variables not found: {missing}',
+    'Variabler mangler i datasettet: {missing}': 'Variables missing from the dataset: {missing}',
+    'aggregate krever opsjonen by()': 'aggregate requires the by() option',
+    'cluster({cov}) støttes ikke for denne kommandoen.': 'cluster({cov}) is not supported for this command.',
+    'cluster({cov}): kunne ikke beregne cluster-standardfeil ({err_type}: {err}).': 'cluster({cov}): could not compute cluster standard errors ({err_type}: {err}).',
+    "cluster({cov}): variabelen '{cov}' finnes ikke i datasettet.": "cluster({cov}): the variable '{cov}' does not exist in the dataset.",
+    "coefplot støtter ikke '{reg_cmd}'. Bruk: regress, logit, probit, poisson.": "coefplot does not support '{reg_cmd}'. Use: regress, logit, probit, poisson.",
+    'collapse ({stat}) er ikke støttet i microdata.no. Støttede statistikker: {supported}.': 'collapse ({stat}) is not supported in microdata.no. Supported statistics: {supported}.',
+    'cox krever hendelse-var og tid-var.': 'cox requires an event variable and a time variable.',
+    'cox: for få observasjoner etter dropna (varighet må være > 0).': 'cox: too few observations after dropna (duration must be > 0).',
+    'cox: variabler {event_var} eller {duration_var} finnes ikke.': 'cox: variables {event_var} or {duration_var} do not exist.',
+    "destring: variabelen '{v}' inneholder ikke-numeriske verdier (f.eks. {sample_str}). Operasjonen ble ikke gjennomført. Bruk 'force' for å konvertere slike verdier til missing.": "destring: the variable '{v}' contains non-numeric values (e.g. {sample_str}). The operation was not carried out. Use 'force' to convert such values to missing.",
+    "exposure-variabel '{expo}' finnes ikke i datasettet": "exposure variable '{expo}' does not exist in the dataset",
+    'hausman krever paneldata (tid-kolonne mangler).': 'hausman requires panel data (time column missing).',
+    'ivregress krever: depvar [exog...] (endog = instrumenter). Eksempel: ivregress lønn mann (formuehøy = alder)': 'ivregress requires: depvar [exog...] (endog = instruments). Example: ivregress lønn mann (formuehøy = alder)',
+    'kaplan-meier krever hendelse-var og tid-var.': 'kaplan-meier requires an event variable and a time variable.',
+    'kaplan-meier: variabler {event_var} eller {duration_var} finnes ikke.': 'kaplan-meier: variables {event_var} or {duration_var} do not exist.',
+    'lifelines må være installert for overlevelsesanalyse. Kjør: pip install lifelines': 'lifelines must be installed for survival analysis. Run: pip install lifelines',
+    'microdata.no støtter bare én nøkkel-variabel i by(). Fikk {n_keys} ({by_keys_str}). Workaround: lag en composite key først:\n  generate composite = string({key0}) ++ "_" ++ string({key1})\n  collapse (...) ..., by(composite)': 'microdata.no only supports a single key variable in by(). Got {n_keys} ({by_keys_str}). Workaround: create a composite key first:\n  generate composite = string({key0}) ++ "_" ++ string({key1})\n  collapse (...) ..., by(composite)',
+    'p-verdi': 'p-value',
+    'rdd krever: depvar runvar [covariater]. Eksempel: rdd vote margin': 'rdd requires: depvar runvar [covariates]. Example: rdd vote margin',
+    'regress-panel-diff krever: depvar group_var treated_var [covariater]': 'regress-panel-diff requires: depvar group_var treated_var [covariates]',
+    'reshape-to-panel fant ingen variabler å panele for prefiks(ene) {prefixes_str}. Den trenger kolonner på formen <prefiks><suffiks> der suffikset er tall/dato (f.eks. lonn2014, lonn2018 → prefiks `lonn`). Importer samme variabel på flere datoer med ulike navn FØR reshape, f.eks. `import db/INNTEKT_WLONN 2014-12-31 as lonn2014`. Kolonner i datasettet nå: {cols}.': 'reshape-to-panel found no variables to reshape for the prefix(es) {prefixes_str}. It needs columns of the form <prefix><suffix> where the suffix is a number/date (e.g. lonn2014, lonn2018 → prefix `lonn`). Import the same variable on multiple dates under different names BEFORE reshaping, e.g. `import db/INNTEKT_WLONN 2014-12-31 as lonn2014`. Columns currently in the dataset: {cols}.',
+    'reshape-to-panel krever minst ett variabel-prefiks, f.eks. `reshape-to-panel lonn` når datasettet har lonn2014, lonn2018.': 'reshape-to-panel requires at least one variable prefix, e.g. `reshape-to-panel lonn` when the dataset has lonn2014, lonn2018.',
+    'robust: kunne ikke beregne robuste standardfeil ({err_type}: {err}).': 'robust: could not compute robust standard errors ({err_type}: {err}).',
+    'statsmodels må være installert for regresjonskommandoer. Kjør: pip install statsmodels': 'statsmodels must be installed for regression commands. Run: pip install statsmodels',
+    'summarize-panel krever paneldata (tid-kolonne mangler).': 'summarize-panel requires panel data (time column missing).',
+    'tabulate-panel krever paneldata (tid-kolonne mangler).': 'tabulate-panel requires panel data (time column missing).',
+    'transitions-panel krever enhetsnøkkel (PERSONID_1 eller unit_id).': 'transitions-panel requires a unit key (PERSONID_1 or unit_id).',
+    'transitions-panel krever paneldata (tid-kolonne mangler).': 'transitions-panel requires panel data (time column missing).',
+    '{cmd} krever paneldata (tid-kolonne mangler).': '{cmd} requires panel data (time column missing).',
+    # --- END lines 3000-6000 additions ---
+    # --- BEGIN lines 6000-end additions ---
+    '\n--- Kommandohistorikk ({n} kommandoer) ---': '\n--- Command history ({n} commands) ---',
+    '\n--- Modell: {cmd} ---\n{summary}\n': '\n--- Model: {cmd} ---\n{summary}\n',
+    '\n--- Variabler i {active_name} ({n_str} enheter) ---': '\n--- Variables in {active_name} ({n_str} units) ---',
+    '  -> Lagt til variabler: {names}': '  -> Added variables: {names}',
+    "  FEIL PÅ KOMMANDO '{cmd}' ({err_type}): {err}": "  ERROR ON COMMAND '{cmd}' ({err_type}): {err}",
+    "  FEIL PÅ KOMMANDO '{cmd}': Kunne ikke generere figur.": "  ERROR ON COMMAND '{cmd}': Could not generate figure.",
+    '  FEIL: coefplot krever avhengig variabel og minst én uavhengig variabel.': '  ERROR: coefplot requires a dependent variable and at least one independent variable.',
+    ' (standardisert)': ' (standardized)',
+    " Kilden '{active_name}' ble laget med collapse by({collapse_key}). Hvis '{collapse_key}' finnes i {into_name}, bruk: merge ... into {into_name} on {collapse_key}": " The source '{active_name}' was created with collapse by({collapse_key}). If '{collapse_key}' exists in {into_name}, use: merge ... into {into_name} on {collapse_key}",
+    ' Kolonner i {active_name}: {source_cols}. Kolonner i {into_name}: {target_cols}.': ' Columns in {active_name}: {source_cols}. Columns in {into_name}: {target_cols}.',
+    ' Variabelen er avsluttet i {last_yr} — for nyere år, bruk en variant som er gyldig da (f.eks. en annen årgang/registerversjon av samme variabel).': ' The variable ended in {last_yr} — for more recent years, use a variant that is valid then (e.g. another vintage/register version of the same variable).',
+    ' [{n} kodeverdier]': ' [{n} code values]',
+    '(lagret, men påvirker ikke beregninger ennå)': '(saved, but does not affect calculations yet)',
+    '(static-kilde feilet, faller tilbake til generering: {err})': '(static source failed, falling back to generation: {err})',
+    '({a} av {b} observasjoner beholdt)': '({a} of {b} observations kept)',
+    '({d} av {b} observasjoner droppet)': '({d} of {b} observations dropped)',
+    ', hvorav {miss_str} missingverdier': ', of which {miss_str} missing values',
+    '-> Sample: beholdt {n_keep} av {n_total} observasjoner (seed={seed}).': '-> Sample: kept {n_keep} of {n_total} observations (seed={seed}).',
+    '-> Sample: datasettet er tomt.': '-> Sample: the dataset is empty.',
+    "// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)": "// m2py: invalid value '{val}' for '{key}' — ignored (use on/off)",
+    "// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (tillatt: {allowed_str})": "// m2py: invalid value '{val}' for '{key}' — ignored (allowed: {allowed_str})",
+    "// m2py: ukjent direktiv '{key}' — ignorert": "// m2py: unknown directive '{key}' — ignored",
+    '// m2py: {key} = {state} (satt fra script-direktiv)': '// m2py: {key} = {state} (set from script directive)',
+    '// m2py: {key} = {val} (satt fra script-direktiv)': '// m2py: {key} = {val} (set from script directive)',
+    "ADVARSEL: 'if'-betingelse støttes ikke for kommandoen '{cmd}' — betingelsen er ignorert.": "WARNING: an 'if' condition is not supported for the command '{cmd}' — the condition is ignored.",
+    "ADVARSEL: klarte ikke å laste ekstern metadata/kodeliste for '{w}' — bruker innebygde demo-verdier. Etiketter og fordelinger kan avvike fra det ekte registeret.": "WARNING: failed to load external metadata/code list for '{w}' — using built-in demo values. Labels and distributions may differ from the real register.",
+    'ADVARSEL: scrub-{verb} kjøres ikke ved import (avhenger av hele datasettet). Kjør det som egen linje etter at datasettet er bygd.': 'WARNING: scrub-{verb} is not run at import (depends on the whole dataset). Run it as a separate line after the dataset has been built.',
+    'ADVARSEL: {date1} er ikke en standard importdato for «{vshort}» (gyldige er årlige fra {first} til {last}).{hint}': 'WARNING: {date1} is not a standard import date for «{vshort}» (valid ones are yearly from {first} to {last}).{hint}',
+    'ADVARSEL: «{vshort}» er en Fast-variabel — dato ignoreres.': 'WARNING: «{vshort}» is a Fast (fixed) variable — the date is ignored.',
+    'AV': 'OFF',
+    'Aggregerte {active_name} gruppert på {by_var} til {after_str} verdier': 'Aggregated {active_name} grouped by {by_var} into {after_str} values',
+    'Aggregerte {active_name} til {after_str} verdier': 'Aggregated {active_name} into {after_str} values',
+    'Alle observasjoner i {active_name} er slettet': 'All observations in {active_name} have been deleted',
+    "Bruk 'help <kommando>' eller 'help-function <funksjon>' for hjelp.": "Use 'help <command>' or 'help-function <function>' for help.",
+    'Datasettet {name} er valgt': 'The dataset {name} is selected',
+    'Et tomt datasett, {name}, ble opprettet og valgt': 'An empty dataset, {name}, was created and selected',
+    'FEIL i scrub-{verb}: {err}': 'ERROR in scrub-{verb}: {err}',
+    "FEIL: '{cmd}' er ikke gyldig her. Nøstede for-løkker støttes ikke, og 'end'/'endblock' må ha en tilhørende 'for'/'textblock'.": "ERROR: '{cmd}' is not valid here. Nested for-loops are not supported, and 'end'/'endblock' must have a matching 'for'/'textblock'.",
+    "FEIL: '{on_var}' finnes i {into_name}, men ikke i {active_name}. Kilden {active_name} har heller ikke nøkkelkolonnen '{src_key}'. Tilgjengelige kolonner i {active_name}: {source_cols}. Bruk 'on <koblingsvariabel>' der koblingsvariabelen finnes i begge datasett.": "ERROR: '{on_var}' exists in {into_name}, but not in {active_name}. The source {active_name} does not have the key column '{src_key}' either. Available columns in {active_name}: {source_cols}. Use 'on <join variable>' where the join variable exists in both datasets.",
+    "FEIL: Datasett '{name}' finnes allerede.": "ERROR: Dataset '{name}' already exists.",
+    "FEIL: Datasett '{name}' finnes ikke.": "ERROR: Dataset '{name}' does not exist.",
+    "FEIL: Datasett '{name}' finnes ikke. Tilgjengelige datasett: {available}.": "ERROR: Dataset '{name}' does not exist. Available datasets: {available}.",
+    'FEIL: Fant ingen felles koblingsvariabel mellom {active_name} og {ds}. Angi nøkkel med on(...).': 'ERROR: Found no common join variable between {active_name} and {ds}. Specify a key with on(...).',
+    'FEIL: Finner ingen felles koblingsvariabel mellom datasettene.{hint}': 'ERROR: Found no common join variable between the datasets.{hint}',
+    'FEIL: Kan ikke importere «{vshort}» (enhetstype: {var_disp}) inn i et datasett av typen {ds_disp}.\nVariabler med ulik enhetstype må ligge i separate datasett og kombineres via collapse og merge.': 'ERROR: Cannot import «{vshort}» (entity type: {var_disp}) into a dataset of type {ds_disp}.\nVariables with different entity types must be in separate datasets and combined via collapse and merge.',
+    "FEIL: Koblingsvariabel '{missing_str}' finnes ikke i både {active_name} og {ds}. Kolonner i {active_name}: {active_cols}. Kolonner i {ds}: {target_cols}.": "ERROR: Join variable '{missing_str}' does not exist in both {active_name} and {ds}. Columns in {active_name}: {active_cols}. Columns in {ds}: {target_cols}.",
+    "FEIL: Koblingsvariabel '{on_var}' finnes ikke i noen av datasettene.": "ERROR: Join variable '{on_var}' does not exist in either dataset.",
+    "FEIL: Kunne ikke tolke argumentene til '{cmd}': «{raw}». Sjekk syntaksen med `help {cmd}`.": "ERROR: Could not parse the arguments to '{cmd}': «{raw}». Check the syntax with `help {cmd}`.",
+    'FEIL: Ugyldig alpha-verdi: {val}': 'ERROR: Invalid alpha value: {val}',
+    'FEIL: Ugyldig seed-verdi: {val}': 'ERROR: Invalid seed value: {val}',
+    "FEIL: Ukjent kommando '{cmd}'.": "ERROR: Unknown command '{cmd}'.",
+    'FEIL: assign-labels: ugyldig syntaks — forventer variabelnavn og kodelistenavn: assign-labels var kodeliste': 'ERROR: assign-labels: invalid syntax — expected a variable name and a code list name: assign-labels var codelist',
+    "FEIL: define-labels: ugyldig syntaks — forventer kodelistenavn etterfulgt av verdi/etikett-par, f.eks. define-labels yrke 1 'Ufaglært arbeider' 2 'Faglært'. Husk anførselstegn rundt etiketter med mellomrom.": "ERROR: define-labels: invalid syntax — expected a code list name followed by value/label pairs, e.g. define-labels yrke 1 'Unskilled worker' 2 'Skilled'. Remember quotes around labels with spaces.",
+    'FEIL: delete-dataset krever datasettnavn.': 'ERROR: delete-dataset requires a dataset name.',
+    'FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. Fikk {n_keys} ({keys_str}). Workaround: lag en composite key først:\n  generate composite = string({key0}) ++ "_" ++ string({key1})\n  merge ... into <ds> on composite': 'ERROR: microdata.no only supports a single key variable in `on`. Got {n_keys} ({keys_str}). Workaround: create a composite key first:\n  generate composite = string({key0}) ++ "_" ++ string({key1})\n  merge ... into <ds> on composite',
+    'FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. Fikk {n_keys} ({keys_str}). Workaround: lag en composite key først:\n  generate composite = string({key0}) ++ "_" ++ string({key1})\n  merge {ds}, on(composite)': 'ERROR: microdata.no only supports a single key variable in `on`. Got {n_keys} ({keys_str}). Workaround: create a composite key first:\n  generate composite = string({key0}) ++ "_" ++ string({key1})\n  merge {ds}, on(composite)',
+    'FEIL: nøstede for...end-blokker støttes ikke i microdata.no. Bruk flere nivåer i én løkke med `;`, f.eks. `for i in 1:2; j in 3:4`.': 'ERROR: nested for...end blocks are not supported in microdata.no. Use multiple levels in one loop with `;`, e.g. `for i in 1:2; j in 3:4`.',
+    'FEIL: protect-modulen (dataminimering) er ikke tilgjengelig.': 'ERROR: the protect module (data minimisation) is not available.',
+    'FEIL: rename-dataset krever gammelt og nytt navn.': 'ERROR: rename-dataset requires an old and a new name.',
+    'FEIL: scrub krever et aktivt datasett.': 'ERROR: scrub requires an active dataset.',
+    'FEIL: scrub-{verb} krever minst én variabel, f.eks. scrub-{verb}(VARIABEL).': 'ERROR: scrub-{verb} requires at least one variable, e.g. scrub-{verb}(VARIABLE).',
+    'FEIL: scrub-{verb} støttes ikke i microdata ennå. Tilgjengelig: jitter, noise, winsorize, bin, coarsen, year, month, diff, shorten, collapse, pseudonymize, swap, auto, risk.': 'ERROR: scrub-{verb} is not supported in microdata yet. Available: jitter, noise, winsorize, bin, coarsen, year, month, diff, shorten, collapse, pseudonymize, swap, auto, risk.',
+    "FEIL: ugyldig alias '{alias}' i {cmd}. Bruk $navn, ${{navn}}, eller navn ++ to_str(navn) for å interpolere bindinger.": "ERROR: invalid alias '{alias}' in {cmd}. Use $name, ${{name}}, or name ++ to_str(name) to interpolate bindings.",
+    "FEIL: ugyldig variabelnavn '{tgt}' i generate. Bruk $navn, ${{navn}}, eller navn ++ to_str(navn) for å interpolere bindinger.": "ERROR: invalid variable name '{tgt}' in generate. Use $name, ${{name}}, or name ++ to_str(name) to interpolate bindings.",
+    'FEIL: ukjent scrub-verb: {verb}': 'ERROR: unknown scrub verb: {verb}',
+    'FEIL: ukjent(e) variabel(er) i scrub-{verb}: {missing_str}': 'ERROR: unknown variable(s) in scrub-{verb}: {missing_str}',
+    'FEIL: {cmd} ville redusere populasjonen til {n} enheter. microdata.no krever minst {min_pop} enheter per populasjon. Datasettet er uendret.': 'ERROR: {cmd} would reduce the population to {n} units. microdata.no requires at least {min_pop} units per population. The dataset is unchanged.',
+    'FEIL: {err}': 'ERROR: {err}',
+    'FEIL: {missing} finnes ikke i {active_name}.': 'ERROR: {missing} does not exist in {active_name}.',
+    'FEIL: «{vshort}» er en {temp}-variabel og krever en importdato.\nLegg til dato i kommandoen: import {vpath_disp} ÅÅÅÅ-MM-DD': 'ERROR: «{vshort}» is a {temp} variable and requires an import date.\nAdd a date to the command: import {vpath_disp} YYYY-MM-DD',
+    'FEIL: «{vshort}» har ingen gyldig importdato {date1}. Gyldige datoer er årlige fra {first} til {last}.{hint}': 'ERROR: «{vshort}» has no valid import date {date1}. Valid dates are yearly from {first} to {last}.{hint}',
+    'Flettet variabler fra {ds} inn i {active_name} med {n_str} enheter (koblet på {on_cols_str})': 'Merged variables from {ds} into {active_name} with {n_str} units (joined on {on_cols_str})',
+    'Flettet {cols_str} fra {active_name} inn i {into_name} med {n_str} enheter': 'Merged {cols_str} from {active_name} into {into_name} with {n_str} units',
+    'Genererte {target} med {n_str} enheter': 'Generated {target} with {n_str} units',
+    "Hjelp for '{topic}': Se HTML-grensesnittet (microdata_runner.html) for fullstendig dokumentasjon.": "Help for '{topic}': See the HTML interface (microdata_runner.html) for full documentation.",
+    'Importerte {short} i perioden {date1} til {date2} som {alias} til {active_name} med {n_str} enheter': 'Imported {short} for the period {date1} to {date2} as {alias} into {active_name} with {n_str} units',
+    'Importerte {short} på datoen {date1} som {alias} til {active_name} med {n_str} enheter': 'Imported {short} on the date {date1} as {alias} into {active_name} with {n_str} units',
+    'Importerte {short} som {alias} til {active_name} med {n_str} enheter': 'Imported {short} as {alias} into {active_name} with {n_str} units',
+    'Importerte {var_desc} som paneldata til {active_name} med {n_str} enheter': 'Imported {var_desc} as panel data into {active_name} with {n_str} units',
+    "Ingen aktivt datasett. Bruk 'create-dataset' eller 'use'.": "No active dataset. Use 'create-dataset' or 'use'.",
+    'Ingen data': 'No data',
+    'Jobb/arbeidsforhold': 'Job/employment relationship',
+    'Kjøretøy': 'Vehicle',
+    'Koeffisient{std_label}': 'Coefficient{std_label}',
+    'Kommune': 'Municipality',
+    'Kopierte datasett {src} til {dst}': 'Copied dataset {src} to {dst}',
+    'Kurs': 'Course',
+    'Målepunkt': 'Measurement point',
+    "Omdøpte datasett '{old_name}' til '{new_name}'": "Renamed dataset '{old_name}' to '{new_name}'",
+    'Opprettet en (lokal) kobling': 'Created a (local) link',
+    'Opprettet en kobling fra {source} til {alias}': 'Created a link from {source} to {alias}',
+    'Person i trafikkulykke': 'Person in traffic accident',
+    'Populasjonen er {n} enheter ({context}). microdata.no tillater ikke populasjoner med færre enn {min_pop} enheter.': 'The population is {n} units ({context}). microdata.no does not allow populations with fewer than {min_pop} units.',
+    'Populasjonen er {n} enheter. microdata.no krever minst {min_pop} enheter for deskriptiv statistikk ({cmd}). Unntak: ren count/sum er tillatt.': 'The population is {n} units. microdata.no requires at least {min_pop} units for descriptive statistics ({cmd}). Exception: plain count/sum is allowed.',
+    'Prosent': 'Percent',
+    'PÅ': 'ON',
+    'Slettet datasett: {name}': 'Deleted dataset: {name}',
+    'Sykehusopphold (NPR)': 'Hospital stay (NPR)',
+    'Tetthet': 'Density',
+    'Trafikkulykke': 'Traffic accident',
+    'Variabel': 'Variable',
+    'alpha = {val} {no_effect}': 'alpha = {val} {no_effect}',
+    'cache av {no_effect}': 'cache off {no_effect}',
+    'cache på {no_effect}': 'cache on {no_effect}',
+    "configure: ukjent innstilling '{key}'": "configure: unknown setting '{key}'",
+    'kaplan-meier: for få observasjoner.': 'kaplan-meier: too few observations.',
+    'numerisk': 'numeric',
+    'plotly må være installert for figurkommandoer. Kjør: pip install plotly': 'plotly must be installed for chart commands. Run: pip install plotly',
+    'scrub-auto brukt på: {cols_str}': 'scrub-auto applied to: {cols_str}',
+    'scrub-auto: fant ingen variabler å beskytte.': 'scrub-auto: found no variables to protect.',
+    'scrub-{verb} brukt på {columns_str}.': 'scrub-{verb} applied to {columns_str}.',
+    'seed = {val} {no_effect}': 'seed = {val} {no_effect}',
+    'tekst': 'text',
+    'weibull feilet: {err}': 'weibull failed: {err}',
+    'weibull krever hendelse-var og tid-var.': 'weibull requires an event variable and a time variable.',
+    'weibull: for få observasjoner (varighet må være > 0).': 'weibull: too few observations (duration must be > 0).',
+    'weibull: variabler {event_var} eller {duration_var} finnes ikke.': 'weibull: variables {event_var} or {duration_var} do not exist.',
+    "{cmd} '{target_name}' lar bare {n_unchanged} av {n_total} enheter være uendret. microdata.no tillater ikke endringer som påvirker alle bortsett fra færre enn {min_affected} enheter.": "{cmd} '{target_name}' leaves only {n_unchanged} of {n_total} units unchanged. microdata.no does not allow changes that affect all but fewer than {min_affected} units.",
+    "{cmd} '{target_name}' påvirker bare {n_affected} av {n_total} enheter. microdata.no tillater ikke endringer som påvirker færre enn {min_affected} enheter (unntak: alle eller ingen).": "{cmd} '{target_name}' affects only {n_affected} of {n_total} units. microdata.no does not allow changes that affect fewer than {min_affected} units (exception: all or none).",
+    '{colname} er en pseudonymvariabel og kan ikke brukes i {context}. Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on).': '{colname} is a pseudonym variable and cannot be used in {context}. Pseudonyms can only be used as a key in collapse(by) or merge(on).',
+    "{colname} er en strengvariabel (alfanumerisk) i microdata.no — operasjonen '{op}' krever en numerisk variabel. Bruk frekvens/count i stedet (f.eks. tabulate).": "{colname} is a string variable (alphanumeric) in microdata.no — the operation '{op}' requires a numeric variable. Use frequency/count instead (e.g. tabulate).",
+    '{ident} er en pseudonymvariabel og kan ikke brukes i {cmd}-uttrykk. Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on).': '{ident} is a pseudonym variable and cannot be used in {cmd} expressions. Pseudonyms can only be used as a key in collapse(by) or merge(on).',
+    # --- END lines 6000-end additions ---
+    # --- END engelsk meldingskatalog ---
+}
+
 # Bakoverkompatibilitet: tidligere het pseudonym-/type-/for-løkke-sjekkene
 # "streng emulering". Nå er det ett samlet valg.
 _is_strict_emulation = _is_disclosure_control
@@ -655,25 +901,25 @@ class MicroParser:
                     continue
                 if ' in ' not in level_str:
                     return {"raw": remainder, "_for_error":
-                            f"manglende 'in' i for-nivå: '{level_str}'"}
+                            _t("manglende 'in' i for-nivå: '{level_str}'", level_str=level_str)}
                 vars_str, spec = level_str.split(' in ', 1)
                 var_names = [v.strip() for v in vars_str.split(',') if v.strip()]
                 if not var_names:
                     return {"raw": remainder, "_for_error":
-                            "for-løkke mangler iteratornavn"}
+                            _t("for-løkke mangler iteratornavn")}
                 spec = spec.strip()
                 # S5: avvis literal parens rundt iterator-spec (microdata.no-syntaks
                 # bruker ikke parens — parentesene i grammatikken er meta-syntaktiske).
                 if _is_strict_emulation() and spec.startswith('(') and spec.endswith(')'):
                     return {"raw": remainder, "_for_error":
-                            "parentes rundt iterator-listen er ikke gyldig i "
-                            "microdata.no. Skriv f.eks. `for y in 1998:2009` eller "
-                            "`for y in 1998, 1999, 2000` (uten parens)."}
+                            _t("parentes rundt iterator-listen er ikke gyldig i "
+                               "microdata.no. Skriv f.eks. `for y in 1998:2009` eller "
+                               "`for y in 1998, 1999, 2000` (uten parens).")}
                 # S5: avvis literal ellipsis (...) i verdilisten — bruk range i stedet.
                 if _is_strict_emulation() and '...' in spec:
                     return {"raw": remainder, "_for_error":
-                            "ellipsis `...` er ikke gyldig i for-løkker i "
-                            "microdata.no. Bruk range-syntax: f.eks. `for y in 1998 : 2009`."}
+                            _t("ellipsis `...` er ikke gyldig i for-løkker i "
+                               "microdata.no. Bruk range-syntax: f.eks. `for y in 1998 : 2009`.")}
                 # Top-level komma-split for multi-iterator. For single-iterator
                 # behandles hele spec som én verdiliste.
                 if len(var_names) > 1:
@@ -701,12 +947,16 @@ class MicroParser:
                     value_lists.append(converted)
                 if len(value_lists) != len(var_names):
                     return {"raw": remainder, "_for_error":
-                            f"for-nivå '{vars_str.strip()}': {len(var_names)} "
-                            f"iteratorer men {len(value_lists)} verdilister"}
+                            _t("for-nivå '{vars_str}': {n_vars} "
+                               "iteratorer men {n_lists} verdilister",
+                               vars_str=vars_str.strip(), n_vars=len(var_names),
+                               n_lists=len(value_lists))}
                 if value_lists and len({len(vl) for vl in value_lists}) > 1:
                     return {"raw": remainder, "_for_error":
-                            f"for-nivå '{vars_str.strip()}': verdilistene må ha "
-                            f"samme lengde ({[len(vl) for vl in value_lists]})"}
+                            _t("for-nivå '{vars_str}': verdilistene må ha "
+                               "samme lengde ({lengths})",
+                               vars_str=vars_str.strip(),
+                               lengths=[len(vl) for vl in value_lists])}
                 levels.append({"vars": var_names, "values": value_lists})
             if not levels:
                 return {"raw": remainder}
@@ -866,7 +1116,7 @@ def _split_top_level_bool(s, sep):
     Del streng s på tegn sep ('&' eller '|') som er utenfor parenteser og utenfor anførselstegn.
     """
     if sep not in ('&', '|'):
-        raise ValueError("sep må være '&' eller '|'")
+        raise ValueError(_t("sep må være '&' eller '|'"))
     parts = []
     depth = 0
     quote = None
@@ -1018,12 +1268,12 @@ def _micro_expr_fixup(expr):
         if _is_disclosure_control() and any(
             (not is_q) and re.search(_DOT_COMPARE_RE, t) for is_q, t in _segs
         ):
-            raise ValueError(
+            raise ValueError(_t(
                 "Sammenligning med `.` (Stata-syntaks som `x == .`) er ikke "
                 "gyldig i microdata.no. Bruk `sysmiss(x)` for å teste om en "
                 "verdi er missing (f.eks. `drop if sysmiss(x)`). "
                 "Tildeling med `= .` (f.eks. `generate x = .`) er OK."
-            )
+            ))
         # Konverter enslige `.` (utenfor strenger) til np.nan slik at både
         # tildeling og aritmetikk med missing fungerer.
         if any((not is_q) and re.search(_DOT_RE, t) for is_q, t in _segs):
@@ -1122,7 +1372,7 @@ def _py_eval_expr(df, expr):
     - Resultatet normaliseres til en Series med samme index som df.
     """
     if expr is None or (isinstance(expr, str) and not expr.strip()):
-        raise ValueError("Tomt uttrykk i generate.")
+        raise ValueError(_t("Tomt uttrykk i generate."))
     expr = _micro_expr_fixup(expr)
     # Bygg eval-miljø: kolonnenavn -> Series, microdata-funksjoner og np
     env = dict(_EVAL_LOCALS)
@@ -3331,8 +3581,8 @@ def _ensure_statsmodels():
         return sm, Probit
     except ImportError:
         raise ImportError(
-            "statsmodels må være installert for regresjonskommandoer. "
-            "Kjør: pip install statsmodels"
+            _t("statsmodels må være installert for regresjonskommandoer. "
+            "Kjør: pip install statsmodels")
         )
 
 def calculate_gini(x):
@@ -3813,11 +4063,12 @@ class DataTransformHandler:
                     bad = converted.isna() & ~orig_na & (src.str.strip() != '')
                     if bad.any():
                         sample = list(dict.fromkeys(src[bad].tolist()))[:3]
+                        sample_str = ', '.join(repr(s) for s in sample)
                         raise ValueError(
-                            f"destring: variabelen '{v}' inneholder ikke-numeriske "
-                            f"verdier (f.eks. {', '.join(repr(s) for s in sample)}). "
-                            f"Operasjonen ble ikke gjennomført. Bruk 'force' for å "
-                            f"konvertere slike verdier til missing."
+                            _t("destring: variabelen '{v}' inneholder ikke-numeriske "
+                            "verdier (f.eks. {sample_str}). "
+                            "Operasjonen ble ikke gjennomført. Bruk 'force' for å "
+                            "konvertere slike verdier til missing.", v=v, sample_str=sample_str)
                         )
                 new_col = f"{prefix}{v}{suffix}"
                 df[new_col] = converted
@@ -3827,8 +4078,8 @@ class DataTransformHandler:
             prefixes = args.get('prefixes', [])
             if not prefixes:
                 raise ValueError(
-                    "reshape-to-panel krever minst ett variabel-prefiks, "
-                    "f.eks. `reshape-to-panel lonn` når datasettet har lonn2014, lonn2018."
+                    _t("reshape-to-panel krever minst ett variabel-prefiks, "
+                    "f.eks. `reshape-to-panel lonn` når datasettet har lonn2014, lonn2018.")
                 )
             id_col = _get_df_key_col(df) or df.index.name or 'id'
             id_col = id_col if id_col in df.columns else df.columns[0]
@@ -3844,13 +4095,14 @@ class DataTransformHandler:
                             time_vals.add(suf)
             if not stub_cols:
                 _cols = ', '.join(str(c) for c in df.columns)
+                _prefixes_str = ', '.join(prefixes)
                 raise ValueError(
-                    "reshape-to-panel fant ingen variabler å panele for prefiks(ene) "
-                    f"{', '.join(prefixes)}. Den trenger kolonner på formen <prefiks><suffiks> "
+                    _t("reshape-to-panel fant ingen variabler å panele for prefiks(ene) "
+                    "{prefixes_str}. Den trenger kolonner på formen <prefiks><suffiks> "
                     "der suffikset er tall/dato (f.eks. lonn2014, lonn2018 → prefiks `lonn`). "
                     "Importer samme variabel på flere datoer med ulike navn FØR reshape, "
-                    f"f.eks. `import db/INNTEKT_WLONN 2014-12-31 as lonn2014`. "
-                    f"Kolonner i datasettet nå: {_cols}."
+                    "f.eks. `import db/INNTEKT_WLONN 2014-12-31 as lonn2014`. "
+                    "Kolonner i datasettet nå: {cols}.", prefixes_str=_prefixes_str, cols=_cols)
                 )
             time_vals = sorted(time_vals)
             # Vektorisert long-bygging: rad-major (enhet × tid stigende), som
@@ -4118,7 +4370,7 @@ class LabelManager:
 
     def assign_labels(self, var_name, codelist_name):
         if codelist_name not in self.codelists:
-            raise ValueError(f"Kodeliste '{codelist_name}' er ikke definert. Bruk define-labels først.")
+            raise ValueError(_t("Kodeliste '{codelist_name}' er ikke definert. Bruk define-labels først.", codelist_name=codelist_name))
         self.var_to_codelist[var_name] = codelist_name
 
     def drop_labels(self, *names):
@@ -4360,9 +4612,9 @@ class LabelManager:
         """Formatterer kodeliste for list-labels output."""
         cl = self.codelists.get(codelist_or_var) or self.get_codelist_for_var(codelist_or_var, time)
         if not cl:
-            return f"Kodeliste eller variabel '{codelist_or_var}' ikke funnet."
+            return _t("Kodeliste eller variabel '{codelist_or_var}' ikke funnet.", codelist_or_var=codelist_or_var)
         lines = [f"  {k}: {v}" for k, v in sorted(cl.items(), key=lambda x: (str(x[0]), x[0]))]
-        return "Kodeliste " + codelist_or_var + ":\n" + "\n".join(lines)
+        return _t("Kodeliste {codelist_or_var}:", codelist_or_var=codelist_or_var) + "\n" + "\n".join(lines)
 
 
 def _parse_count_option(opt_val, default=10):
@@ -4409,7 +4661,7 @@ class StatsEngine:
         if cmd == 'aggregate':
             by_var = options.get('by')
             if not by_var:
-                raise ValueError("aggregate krever opsjonen by()")
+                raise ValueError(_t("aggregate krever opsjonen by()"))
             for target in args['targets']:
                 stat, src = target['stat'], target['src']
                 new_var = target['target'] or src
@@ -4424,26 +4676,31 @@ class StatsEngine:
                 stat = (t.get('stat') or '').lower()
                 if stat in _REJECTED_COLLAPSE_STATS:
                     raise ValueError(
-                        f"collapse ({stat}) er ikke støttet i microdata.no. "
-                        f"Støttede statistikker: {_SUPPORTED_COLLAPSE_STATS_DISPLAY}."
+                        _t("collapse ({stat}) er ikke støttet i microdata.no. "
+                        "Støttede statistikker: {supported}.",
+                        stat=stat, supported=_SUPPORTED_COLLAPSE_STATS_DISPLAY)
                     )
             # S2: avvis multi-key by(k1 k2) — microdata.no støtter kun én nøkkel
             if isinstance(by_var, str) and by_var.strip():
                 by_keys = by_var.strip().split()
                 if len(by_keys) > 1:
+                    _by_keys_str = ', '.join(by_keys)
                     raise ValueError(
-                        f"microdata.no støtter bare én nøkkel-variabel i by(). "
-                        f"Fikk {len(by_keys)} ({', '.join(by_keys)}). "
-                        f"Workaround: lag en composite key først:\n"
-                        f"  generate composite = string({by_keys[0]}) ++ \"_\" ++ string({by_keys[1]})\n"
-                        f"  collapse (...) ..., by(composite)"
+                        _t("microdata.no støtter bare én nøkkel-variabel i by(). "
+                        "Fikk {n_keys} ({by_keys_str}). "
+                        "Workaround: lag en composite key først:\n"
+                        "  generate composite = string({key0}) ++ \"_\" ++ string({key1})\n"
+                        "  collapse (...) ..., by(composite)",
+                        n_keys=len(by_keys), by_keys_str=_by_keys_str,
+                        key0=by_keys[0], key1=by_keys[1])
                     )
                 by_var = by_keys[0]
             missing = [t['src'] for t in args['targets'] if t['src'] not in df.columns]
             if missing:
                 raise ValueError(
-                    f"Kolonner {missing} finnes ikke i datasettet. "
-                    "collapse erstatter data med aggregert resultat; bruk én collapse med alle (stat) var -> navn i samme kommando, f.eks. collapse (mean) inntekt -> snitt (count) inntekt -> antall, by(kommune)"
+                    _t("Kolonner {missing} finnes ikke i datasettet. "
+                    "collapse erstatter data med aggregert resultat; bruk én collapse med alle (stat) var -> navn i samme kommando, f.eks. collapse (mean) inntekt -> snitt (count) inntekt -> antall, by(kommune)",
+                    missing=missing)
                 )
             agg_dict = {}
             for t in args['targets']:
@@ -4493,9 +4750,9 @@ class StatsEngine:
                 return result
             # Bygg statistikk-rader: Gj.snitt, Std.avvik, Antall, persentiler
             col_map = {}
-            col_map['Gj.snitt'] = {v: _w_cols[v].mean() for v in vars_to_sum}
-            col_map['Std.avvik'] = {v: _w_cols[v].std() for v in vars_to_sum}
-            col_map['Antall'] = {v: df[v].count() for v in vars_to_sum}
+            col_map[_t('Gj.snitt')] = {v: _w_cols[v].mean() for v in vars_to_sum}
+            col_map[_t('Std.avvik')] = {v: _w_cols[v].std() for v in vars_to_sum}
+            col_map[_t('Antall')] = {v: df[v].count() for v in vars_to_sum}
             # T8: persentiler (inkl. median) vises med 3 signifikante sifre når
             # avsløringskontroll er på. Gjelder ikke gjennomsnitt eller std.
             for pct, label in [(0.01, '1%'), (0.25, '25%'), (0.5, '50%'), (0.75, '75%'), (0.99, '99%')]:
@@ -4630,7 +4887,7 @@ class StatsEngine:
 
         if cmd == 'summarize-panel':
             if 'tid' not in df.columns:
-                raise ValueError("summarize-panel krever paneldata (tid-kolonne mangler).")
+                raise ValueError(_t("summarize-panel krever paneldata (tid-kolonne mangler)."))
             vars_list = list(args) if args else [c for c in df.columns if c not in ('unit_id', 'PERSONID_1', 'tid') and pd.api.types.is_numeric_dtype(df[c])]
             vars_list = [v for v in vars_list if v in df.columns and pd.api.types.is_numeric_dtype(df[v])]
             if not vars_list:
@@ -4677,12 +4934,16 @@ class StatsEngine:
                     _low_cells = int((_flat < _low_cell).sum())
                     _low_ratio = _low_cells / _total_cells
                     if _low_ratio > _DC_TABULATE_LOW_RATIO:
+                        _low_pct = f"{_low_ratio*100:.0f}"
                         raise ValueError(
-                            f"Tabellen kan ikke vises pga. for mange små celler "
-                            f"({_low_cells} av {_total_cells} celler har frekvens "
-                            f"<{_low_cell}, dvs. {_low_ratio*100:.0f}% — "
-                            f"grensen er {int(_DC_TABULATE_LOW_RATIO*100)}%). "
-                            f"Reduser antall kategorier eller utvid populasjonen."
+                            _t("Tabellen kan ikke vises pga. for mange små celler "
+                            "({low_cells} av {total_cells} celler har frekvens "
+                            "<{low_cell}, dvs. {low_pct}% — "
+                            "grensen er {limit_pct}%). "
+                            "Reduser antall kategorier eller utvid populasjonen.",
+                            low_cells=_low_cells, total_cells=_total_cells,
+                            low_cell=_low_cell, low_pct=_low_pct,
+                            limit_pct=int(_DC_TABULATE_LOW_RATIO*100))
                         )
 
             def _parse_sort_arg(opt_val):
@@ -4942,7 +5203,7 @@ class StatsEngine:
 
         if cmd == 'tabulate-panel':
             if 'tid' not in df.columns:
-                raise ValueError("tabulate-panel krever paneldata (tid-kolonne mangler).")
+                raise ValueError(_t("tabulate-panel krever paneldata (tid-kolonne mangler)."))
             var1 = args[0]
             vars_rest = args[1:] if len(args) > 1 else []
             dropna = 'missing' not in options
@@ -4969,10 +5230,10 @@ class StatsEngine:
 
         if cmd == 'transitions-panel':
             if 'tid' not in df.columns:
-                raise ValueError("transitions-panel krever paneldata (tid-kolonne mangler).")
+                raise ValueError(_t("transitions-panel krever paneldata (tid-kolonne mangler)."))
             _key = _get_df_key_col(df)
             if not _key:
-                raise ValueError("transitions-panel krever enhetsnøkkel (PERSONID_1 eller unit_id).")
+                raise ValueError(_t("transitions-panel krever enhetsnøkkel (PERSONID_1 eller unit_id)."))
             vars_list = list(args) if args else [c for c in df.columns if c not in ('unit_id', 'PERSONID_1', 'tid')]
             vars_list = [v for v in vars_list if v in df.columns]
             if not vars_list:
@@ -5009,26 +5270,26 @@ class RegressionHandler:
             cov = options['cluster']
             if df_clean is None:
                 raise ValueError(
-                    f"cluster({cov}) støttes ikke for denne kommandoen."
+                    _t("cluster({cov}) støttes ikke for denne kommandoen.", cov=cov)
                 )
             if cov not in df_clean.columns:
                 raise ValueError(
-                    f"cluster({cov}): variabelen '{cov}' finnes ikke i datasettet."
+                    _t("cluster({cov}): variabelen '{cov}' finnes ikke i datasettet.", cov=cov)
                 )
             try:
                 return model.get_robustcov_results(cov_type='cluster', groups=df_clean[cov].values)
             except Exception as e:
                 raise ValueError(
-                    f"cluster({cov}): kunne ikke beregne cluster-standardfeil "
-                    f"({type(e).__name__}: {e})."
+                    _t("cluster({cov}): kunne ikke beregne cluster-standardfeil "
+                    "({err_type}: {err}).", cov=cov, err_type=type(e).__name__, err=e)
                 )
         if options.get('robust'):
             try:
                 return model.get_robustcov_results(cov_type='HC1')
             except Exception as e:
                 raise ValueError(
-                    f"robust: kunne ikke beregne robuste standardfeil "
-                    f"({type(e).__name__}: {e})."
+                    _t("robust: kunne ikke beregne robuste standardfeil "
+                    "({err_type}: {err}).", err_type=type(e).__name__, err=e)
                 )
         return model
 
@@ -5109,13 +5370,13 @@ class RegressionHandler:
 
         def _dummies(base):
             if base not in df.columns:
-                raise ValueError(f"Faktorvariabel '{base}' finnes ikke i datasettet")
+                raise ValueError(_t("Faktorvariabel '{base}' finnes ikke i datasettet", base=base))
             d = pd.get_dummies(df[base], prefix=base, drop_first=True)
             return [(c, d[c].astype(float)) for c in d.columns]
 
         def _numeric(base):
             if base not in df.columns:
-                raise ValueError(f"Variabel '{base}' finnes ikke i datasettet")
+                raise ValueError(_t("Variabel '{base}' finnes ikke i datasettet", base=base))
             return pd.to_numeric(df[base], errors='coerce')
 
         def _operand_cols(tok):
@@ -5178,7 +5439,7 @@ class RegressionHandler:
         cont_vars = [dep_var] + [b for b in _cont_bases if b != dep_var]
         missing = [v for v in cont_vars if v not in df.columns]
         if missing:
-            raise ValueError(f"Variabler ikke funnet: {missing}")
+            raise ValueError(_t("Variabler ikke funnet: {missing}", missing=missing))
         df_work = df[list(dict.fromkeys(cont_vars))].copy()
         for v in cont_vars:
             df_work[v] = pd.to_numeric(df_work[v], errors='coerce')
@@ -5187,7 +5448,7 @@ class RegressionHandler:
 
         df_clean = df_work.dropna().copy()
         if df_clean.empty:
-            raise ValueError("Ingen observasjoner etter konvertering.")
+            raise ValueError(_t("Ingen observasjoner etter konvertering."))
         for col in [dep_var] + indep_vars:
             df_clean[col] = df_clean[col].astype(np.float64)
 
@@ -5210,7 +5471,7 @@ class RegressionHandler:
             model = sm.GLM(Y, X, family=sm.families.Poisson()).fit()
         else:
             raise ValueError(
-                f"coefplot støtter ikke '{reg_cmd}'. Bruk: regress, logit, probit, poisson.")
+                _t("coefplot støtter ikke '{reg_cmd}'. Bruk: regress, logit, probit, poisson.", reg_cmd=reg_cmd))
         model = self._apply_cov(model, options, df_clean)
         return model, dep_var, indep_vars, df_clean
 
@@ -5239,7 +5500,7 @@ class RegressionHandler:
 
         missing = [v for v in cont_vars if v not in df.columns]
         if missing:
-            raise ValueError(f"Variabler ikke funnet i datasettet: {missing}")
+            raise ValueError(_t("Variabler ikke funnet i datasettet: {missing}", missing=missing))
         df_work = df[list(dict.fromkeys(cont_vars))].copy()
         for v in cont_vars:
             df_work[v] = pd.to_numeric(df_work[v], errors='coerce')
@@ -5250,7 +5511,7 @@ class RegressionHandler:
         df_clean = df_work.dropna().copy()
         if df_clean.empty:
             raise ValueError(
-                "Ingen observasjoner etter numerisk konvertering — sjekk at avhengig og uavhengige variabler er tall."
+                _t("Ingen observasjoner etter numerisk konvertering — sjekk at avhengig og uavhengige variabler er tall.")
             )
         for col in [dep_var] + indep_vars:
             df_clean[col] = df_clean[col].astype(np.float64)
@@ -5275,7 +5536,7 @@ class RegressionHandler:
             if options.get('or'):
                 coef = np.exp(model.params)
                 conf = np.exp(model.conf_int(alpha=alpha))
-                out = f"\nModell: logit (odds ratios)\n{pd.DataFrame({'OR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
+                out = f"\n{_t('Modell: logit (odds ratios)')}\n{pd.DataFrame({'OR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
                 return (out, None)
             return (str(model.summary(alpha=alpha)), None)
 
@@ -5285,7 +5546,7 @@ class RegressionHandler:
             if options.get('irr'):
                 coef = np.exp(model.params)
                 conf = np.exp(model.conf_int(alpha=alpha))
-                out = f"\nModell: poisson (incidence rate ratios)\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
+                out = f"\n{_t('Modell: poisson (incidence rate ratios)')}\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
                 return (out, None)
             return (str(model.summary(alpha=alpha)), None)
 
@@ -5298,7 +5559,7 @@ class RegressionHandler:
             _expo = options.get('exposure')
             if _expo:
                 if _expo not in df.columns:
-                    raise ValueError(f"exposure-variabel '{_expo}' finnes ikke i datasettet")
+                    raise ValueError(_t("exposure-variabel '{expo}' finnes ikke i datasettet", expo=_expo))
                 _ev = pd.to_numeric(df.loc[_idx, _expo], errors='coerce')
                 _keep = _ev.notna() & (_ev > 0)
                 if not bool(_keep.all()):
@@ -5324,19 +5585,19 @@ class RegressionHandler:
             if options.get('irr'):
                 coef = np.exp(model.params)
                 conf = np.exp(model.conf_int(alpha=alpha))
-                out = f"\nModell: negative-binomial (incidence rate ratios)\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
+                out = f"\n{_t('Modell: negative-binomial (incidence rate ratios)')}\n{pd.DataFrame({'IRR': coef, '2.5%': conf[0], '97.5%': conf[1]})}\n"
                 return (out, None)
             return (str(model.summary(alpha=alpha)), None)
 
         if cmd in ('regress-panel', 'regress-panel-predict', 'regress-panel-diff'):
             if 'tid' not in df.columns:
-                raise ValueError(f"{cmd} krever paneldata (tid-kolonne mangler).")
+                raise ValueError(_t("{cmd} krever paneldata (tid-kolonne mangler).", cmd=cmd))
             _key = _get_df_key_col(df) or 'unit_id'
 
             # --- regress-panel-diff: bygg interaksjonsledd ---
             if cmd == 'regress-panel-diff':
                 if len(args) < 3:
-                    raise ValueError("regress-panel-diff krever: depvar group_var treated_var [covariater]")
+                    raise ValueError(_t("regress-panel-diff krever: depvar group_var treated_var [covariater]"))
                 group_var = args[1]
                 treated_var = args[2]
                 extra_covars = list(args[3:])
@@ -5442,7 +5703,7 @@ class RegressionHandler:
 
         if cmd == 'hausman':
             if 'tid' not in df.columns:
-                raise ValueError("hausman krever paneldata (tid-kolonne mangler).")
+                raise ValueError(_t("hausman krever paneldata (tid-kolonne mangler)."))
             _key = _get_df_key_col(df) or 'unit_id'
             panel_df = df_clean.copy()
             panel_df[_key] = df.loc[panel_df.index, _key]
@@ -5463,7 +5724,7 @@ class RegressionHandler:
                 re = sm.MixedLM(Y_p, X_p, groups=g).fit(reml=True)
                 common = fe.params.index.intersection(re.fe_params.index)
                 if len(common) == 0:
-                    return ("Hausman (statsmodels): kunne ikke aligne FE og RE-koeffisienter.\n", None)
+                    return (_t("Hausman (statsmodels): kunne ikke aligne FE og RE-koeffisienter.\n"), None)
                 diff = fe.params.loc[common].values - re.fe_params.loc[common].values
                 try:
                     v_fe = fe.cov_params().loc[common, common].values
@@ -5474,15 +5735,17 @@ class RegressionHandler:
                     from scipy.stats import chi2 as chi2_dist
                     pval = 1 - chi2_dist.cdf(chi2, len(diff))
                     out = f"\nHausman (FE vs RE, statsmodels)\nFE (within):\n{fe.summary()}\n\nRE (MixedLM):\n{re.summary()}\n"
-                    out += f"\nDifferanse koeff (FE-RE): chi2={chi2:.4f}, P={pval:.4f}\n"
-                    out += "P<0.05 => bruk FE. P>=0.05 => bruk RE.\n"
+                    _diff_line = _t("Differanse koeff (FE-RE): chi2={chi2}, P={pval}", chi2=f"{chi2:.4f}", pval=f"{pval:.4f}")
+                    out += f"\n{_diff_line}\n"
+                    out += _t("P<0.05 => bruk FE. P>=0.05 => bruk RE.\n")
                     return (out, None)
                 except Exception as e:
-                    return (f"Hausman (statsmodels) feilet: {e}\n", None)
+                    return (_t("Hausman (statsmodels) feilet: {err}\n", err=e), None)
             # linearmodels: bruk .cov for kovariansmatrise (ikke .cov_params())
             common = fe.params.index.intersection(re.params.index)
             if len(common) == 0:
-                return (f"\nHausman\nFE:\n{fe.summary}\n\nRE:\n{re.summary}\n\nIngen felles koeffisienter å sammenligne.\n", None)
+                _no_common = _t("Ingen felles koeffisienter å sammenligne.")
+                return (f"\nHausman\nFE:\n{fe.summary}\n\nRE:\n{re.summary}\n\n{_no_common}\n", None)
             diff = fe.params.loc[common] - re.params.loc[common]
             try:
                 v_fe = fe.cov.loc[common, common].values if hasattr(fe, 'cov') else fe.variance_decomposition
@@ -5496,11 +5759,13 @@ class RegressionHandler:
                 from scipy.stats import chi2 as chi2_dist
                 pval = 1 - chi2_dist.cdf(chi2, len(diff))
                 out = f"\nHausman (FE vs RE)\nFE:\n{fe.summary}\n\nRE:\n{re.summary}\n"
-                out += f"\nDifferanse koeff: {diff.to_dict()}\nchi2={chi2:.4f}, P={pval:.4f}\n"
-                out += "P<0.05 => bruk FE. P>=0.05 => bruk RE.\n"
+                _diff_line2 = _t("Differanse koeff: {diff_dict}\nchi2={chi2}, P={pval}",
+                                  diff_dict=diff.to_dict(), chi2=f"{chi2:.4f}", pval=f"{pval:.4f}")
+                out += f"\n{_diff_line2}\n"
+                out += _t("P<0.05 => bruk FE. P>=0.05 => bruk RE.\n")
                 return (out, None)
             except Exception as e:
-                return (f"Hausman feilet: {e}\n", None)
+                return (_t("Hausman feilet: {err}\n", err=e), None)
 
         if cmd == 'regress-predict':
             model = sm.OLS(Y, X).fit()
@@ -5587,7 +5852,7 @@ class RegressionHandler:
                         extra[f'{base}_{cat}'] = pd.Series(pred_probs[:, i], index=df_clean.index)
             return (str(model.summary(alpha=alpha)), extra)
 
-        return (f"Ukjent regresjonskommando: {cmd}", None)
+        return (_t("Ukjent regresjonskommando: {cmd}", cmd=cmd), None)
 
     def _execute_iv(self, cmd, df, args, options):
         sm, _ = _ensure_statsmodels()
@@ -5598,19 +5863,19 @@ class RegressionHandler:
         instr_vars = args.get('instruments', [])
         if not dep or not endog_vars or not instr_vars:
             raise ValueError(
-                "ivregress krever: depvar [exog...] (endog = instrumenter). "
-                "Eksempel: ivregress lønn mann (formuehøy = alder)"
+                _t("ivregress krever: depvar [exog...] (endog = instrumenter). "
+                "Eksempel: ivregress lønn mann (formuehøy = alder)")
             )
         all_vars = [dep] + exog_vars + endog_vars + instr_vars
         missing = [v for v in all_vars if v not in df.columns]
         if missing:
-            raise ValueError(f"Variabler mangler i datasettet: {missing}")
+            raise ValueError(_t("Variabler mangler i datasettet: {missing}", missing=missing))
         df_iv = df[all_vars].dropna()
         for v in all_vars:
             df_iv[v] = pd.to_numeric(df_iv[v], errors='coerce')
         df_iv = df_iv.dropna()
         if df_iv.empty:
-            raise ValueError("Ingen observasjoner etter fjerning av manglende verdier.")
+            raise ValueError(_t("Ingen observasjoner etter fjerning av manglende verdier."))
         Y = df_iv[dep].astype(float)
 
         # Stage 1: project endogenous vars onto instruments + exog
@@ -5621,7 +5886,8 @@ class RegressionHandler:
             fs = sm.OLS(df_iv[ev].astype(float), Z).fit()
             endog_fitted[ev] = fs.predict()
             f_stat = fs.fvalue
-            first_stage_lines.append(f"  Første trinn ({ev}): F={f_stat:.2f}, R²={fs.rsquared:.4f}")
+            first_stage_lines.append("  " + _t("Første trinn ({ev}): F={f_stat}, R²={rsquared}",
+                                                 ev=ev, f_stat=f"{f_stat:.2f}", rsquared=f"{fs.rsquared:.4f}"))
 
         # Stage 2: regress Y on [exog + fitted endog]
         X2 = df_iv[exog_vars].astype(float).copy() if exog_vars else pd.DataFrame(index=df_iv.index)
@@ -5654,9 +5920,9 @@ class RegressionHandler:
                 method = _m
                 break
         method = method.upper()
-        header = f"\nInstrumentvariabelregresjon ({method})\n"
+        header = f"\n{_t('Instrumentvariabelregresjon ({method})', method=method)}\n"
         header += "\n".join(first_stage_lines) + "\n\n"
-        header += f"Andre trinn (avhengig: {dep}):\n"
+        header += f"{_t('Andre trinn (avhengig: {dep}):', dep=dep)}\n"
         summary = header + str(model_2s.summary(alpha=alpha))
 
         extra = None
@@ -5686,7 +5952,7 @@ class RegressionHandler:
         cluster_var = options.get('cluster')
 
         if not dep or not runvar:
-            raise ValueError("rdd krever: depvar runvar [covariater]. Eksempel: rdd vote margin")
+            raise ValueError(_t("rdd krever: depvar runvar [covariater]. Eksempel: rdd vote margin"))
 
         # i. prefix → dummies
         exog_cols = []
@@ -5704,14 +5970,14 @@ class RegressionHandler:
         all_vars = [dep, runvar] + list(exog_cols)
         if fuzzy_var:
             if fuzzy_var not in df.columns:
-                raise ValueError(f"Fuzzy-variabel '{fuzzy_var}' finnes ikke i datasettet.")
+                raise ValueError(_t("Fuzzy-variabel '{fuzzy_var}' finnes ikke i datasettet.", fuzzy_var=fuzzy_var))
             all_vars.append(fuzzy_var)
         if cluster_var and cluster_var in df.columns:
             all_vars.append(cluster_var)
 
         missing = [v for v in all_vars if v not in df.columns]
         if missing:
-            raise ValueError(f"Variabler mangler i datasettet: {missing}")
+            raise ValueError(_t("Variabler mangler i datasettet: {missing}", missing=missing))
 
         df_rdd = df[all_vars].copy()
         for v in [dep, runvar] + list(exog_cols):
@@ -5720,7 +5986,7 @@ class RegressionHandler:
             df_rdd[fuzzy_var] = pd.to_numeric(df_rdd[fuzzy_var], errors='coerce')
         df_rdd = df_rdd.dropna()
         if df_rdd.empty:
-            raise ValueError("Ingen observasjoner etter fjerning av manglende verdier.")
+            raise ValueError(_t("Ingen observasjoner etter fjerning av manglende verdier."))
         # Sikre float64 for alle numeriske kolonner (unngå object-dtype i numpy)
         for v in [dep, runvar] + list(exog_cols):
             df_rdd[v] = df_rdd[v].astype(np.float64)
@@ -5759,27 +6025,28 @@ class RegressionHandler:
             N_list = result.N
 
             summary_df = pd.DataFrame({
-                'Estimat': coef_df.iloc[:, 0].values,
-                'Std.feil': se_df.iloc[:, 0].values,
-                'p-verdi': pv_df.iloc[:, 0].values,
-                'KI nedre': ci_df.iloc[:, 0].values,
-                'KI øvre': ci_df.iloc[:, 1].values,
+                _t('Estimat'): coef_df.iloc[:, 0].values,
+                _t('Std.feil'): se_df.iloc[:, 0].values,
+                _t('p-verdi'): pv_df.iloc[:, 0].values,
+                _t('KI nedre'): ci_df.iloc[:, 0].values,
+                _t('KI øvre'): ci_df.iloc[:, 1].values,
             }, index=coef_df.index)
 
             info_lines = [f"Running variable: {runvar}"]
             info_lines.append(f"Cutoff: {cutoff}")
-            info_lines.append(f"Polynomial-orden: {poly_order}")
+            info_lines.append(_t("Polynomial-orden: {poly_order}", poly_order=poly_order))
             try:
-                info_lines.append(f"Båndbredde (h): venstre={bws_df.iloc[0, 0]:.2f}, høyre={bws_df.iloc[0, 1]:.2f}")
+                info_lines.append(_t("Båndbredde (h): venstre={left}, høyre={right}",
+                                      left=f"{bws_df.iloc[0, 0]:.2f}", right=f"{bws_df.iloc[0, 1]:.2f}"))
             except Exception:
                 pass
             if N_list:
-                info_lines.append(f"N: venstre={int(N_list[0])}, høyre={int(N_list[1])}")
+                info_lines.append(_t("N: venstre={left}, høyre={right}", left=int(N_list[0]), right=int(N_list[1])))
             if fuzzy_var:
                 info_lines.append(f"Fuzzy: {fuzzy_var}")
             info_text = "\n".join(info_lines)
 
-            return (f"\nRDD (Regression Discontinuity Design)\n{info_text}\n\n{summary_df.to_string()}\n", None)
+            return (f"\n{_t('RDD (Regression Discontinuity Design)')}\n{info_text}\n\n{summary_df.to_string()}\n", None)
 
         except ImportError:
             pass
@@ -5839,25 +6106,26 @@ class RegressionHandler:
         n_right = int((R >= 0).sum())
 
         info = (
-            f"\nRDD (Regression Discontinuity Design)\n"
+            f"\n{_t('RDD (Regression Discontinuity Design)')}\n"
             f"Running variable: {runvar}\n"
             f"Cutoff: {cutoff}\n"
-            f"Polynomial-orden: {poly_order}\n"
-            f"N: venstre={n_left}, høyre={n_right}\n"
+            f"{_t('Polynomial-orden: {poly_order}', poly_order=poly_order)}\n"
+            f"{_t('N: venstre={left}, høyre={right}', left=n_left, right=n_right)}\n"
         )
         if fuzzy_var:
             info += f"Fuzzy: {fuzzy_var}\n"
-            info += f"Første trinn F-stat: {fs.fvalue:.2f}\n"
+            info += _t("Første trinn F-stat: {f_stat}\n", f_stat=f"{fs.fvalue:.2f}")
 
+        _ci_pct = int((1-alpha)*100)
         rows = [{
-            'Estimat': disc,
-            'Std.feil': disc_se,
+            _t('Estimat'): disc,
+            _t('Std.feil'): disc_se,
             'z': disc / disc_se if disc_se > 0 else np.nan,
-            'p-verdi': disc_p,
-            f'KI nedre {int((1-alpha)*100)}%': ci_lo,
-            f'KI øvre {int((1-alpha)*100)}%': ci_hi,
+            _t('p-verdi'): disc_p,
+            _t('KI nedre {pct}%', pct=_ci_pct): ci_lo,
+            _t('KI øvre {pct}%', pct=_ci_pct): ci_hi,
         }]
-        summary_df = pd.DataFrame(rows, index=['Diskontinuitet'])
+        summary_df = pd.DataFrame(rows, index=[_t('Diskontinuitet')])
         return (f"{info}\n{summary_df.to_string()}\n", None)
 
 
@@ -5871,7 +6139,7 @@ class SurvivalHandler:
         try:
             import lifelines
         except ImportError:
-            raise ImportError("lifelines må være installert for overlevelsesanalyse. Kjør: pip install lifelines")
+            raise ImportError(_t("lifelines må være installert for overlevelsesanalyse. Kjør: pip install lifelines"))
 
         if cmd == 'cox':
             return self._cox(df, args, options)
@@ -5879,17 +6147,17 @@ class SurvivalHandler:
             return self._kaplan_meier(df, args, options)
         if cmd == 'weibull':
             return self._weibull(df, args, options)
-        return (f"Ukjent overlevelseskommando: {cmd}", None)
+        return (_t("Ukjent overlevelseskommando: {cmd}", cmd=cmd), None)
 
     def _cox(self, df, args, options):
         from lifelines import CoxPHFitter
 
         if not isinstance(args, (list, tuple)) or len(args) < 2:
-            return (f"cox krever hendelse-var og tid-var.", None)
+            return (_t("cox krever hendelse-var og tid-var."), None)
         event_var, duration_var = args[0], args[1]
         raw_covars = list(args[2:])
         if event_var not in df.columns or duration_var not in df.columns:
-            return (f"cox: variabler {event_var} eller {duration_var} finnes ikke.", None)
+            return (_t("cox: variabler {event_var} eller {duration_var} finnes ikke.", event_var=event_var, duration_var=duration_var), None)
         # i.VARNAME → dummies (Stata-stil). Bygges i en LOKAL arbeidsramme —
         # forskerens datasett skal ikke få dummy-kolonner som bivirkning.
         work_parts = [df[[event_var, duration_var]]]
@@ -5907,7 +6175,7 @@ class SurvivalHandler:
         sub = pd.concat(work_parts, axis=1).dropna(how='any')
         sub = sub[sub[duration_var] > 0]
         if sub.empty or len(sub) < 3:
-            return ("cox: for få observasjoner etter dropna (varighet må være > 0).", None)
+            return (_t("cox: for få observasjoner etter dropna (varighet må være > 0)."), None)
         level = float(options.get('level', 95)) / 100
         alpha = 1 - level
         cph = CoxPHFitter(alpha=alpha)
@@ -5924,10 +6192,10 @@ class SurvivalHandler:
         import plotly.graph_objects as go
 
         if not isinstance(args, (list, tuple)) or len(args) < 2:
-            return ("kaplan-meier krever hendelse-var og tid-var.", None)
+            return (_t("kaplan-meier krever hendelse-var og tid-var."), None)
         event_var, duration_var = args[0], args[1]
         if event_var not in df.columns or duration_var not in df.columns:
-            return (f"kaplan-meier: variabler {event_var} eller {duration_var} finnes ikke.", None)
+            return (_t("kaplan-meier: variabler {event_var} eller {duration_var} finnes ikke.", event_var=event_var, duration_var=duration_var), None)
         by_var = options.get('by')
         alpha = 1 - float(options.get('level', 95)) / 100
         km_rows = []
@@ -5958,7 +6226,7 @@ class SurvivalHandler:
         else:
             sub = df[[event_var, duration_var]].dropna(how='any')
             if sub.empty:
-                return ("kaplan-meier: for få observasjoner.", None)
+                return (_t("kaplan-meier: for få observasjoner."), None)
             kmf = KaplanMeierFitter(alpha=alpha)
             kmf.fit(sub[duration_var], sub[event_var])
             sf = kmf.survival_function_
@@ -5985,10 +6253,10 @@ class SurvivalHandler:
         import plotly.graph_objects as go
 
         if not isinstance(args, (list, tuple)) or len(args) < 2:
-            return ("weibull krever hendelse-var og tid-var.", None)
+            return (_t("weibull krever hendelse-var og tid-var."), None)
         event_var, duration_var = args[0], args[1]
         if event_var not in df.columns or duration_var not in df.columns:
-            return (f"weibull: variabler {event_var} eller {duration_var} finnes ikke.", None)
+            return (_t("weibull: variabler {event_var} eller {duration_var} finnes ikke.", event_var=event_var, duration_var=duration_var), None)
         by_var = options.get('by')
         alpha = 1 - float(options.get('level', 95)) / 100
         wb_rows = []
@@ -6031,7 +6299,7 @@ class SurvivalHandler:
             sub = df[[event_var, duration_var]].dropna(how='any')
             sub = sub[sub[duration_var] > 0]
             if sub.empty or len(sub) < 5:
-                return ("weibull: for få observasjoner (varighet må være > 0).", None)
+                return (_t("weibull: for få observasjoner (varighet må være > 0)."), None)
             try:
                 waf = WeibullAFTFitter(alpha=alpha)
                 waf.fit(sub, duration_col=duration_var, event_col=event_var)
@@ -6045,7 +6313,7 @@ class SurvivalHandler:
                 else:
                     summaries = []
             except Exception as e:
-                return (f"weibull feilet: {e}", None)
+                return (_t("weibull feilet: {err}", err=e), None)
         fig.update_layout(template='plotly_white', xaxis_title='Tid', yaxis_title='Overlevelsesrate S(t)', margin=dict(l=50, r=50, t=40, b=60))
         if wb_rows:
             summary_df = pd.DataFrame(wb_rows)
@@ -6093,7 +6361,7 @@ class PlotHandler:
         try:
             import plotly.graph_objects as go
         except ImportError:
-            raise ImportError("plotly må være installert for figurkommandoer. Kjør: pip install plotly")
+            raise ImportError(_t("plotly må være installert for figurkommandoer. Kjør: pip install plotly"))
 
         if cmd == 'barchart':
             return self._barchart(df, args, options)
@@ -6248,8 +6516,8 @@ class PlotHandler:
             # Tom data — returner en tom figur i stedet for feilmelding
             fig = go.Figure()
             fig.update_layout(template='plotly_white', margin=dict(l=50, r=50, t=40, b=60),
-                              xaxis_title=var, yaxis_title='Antall',
-                              annotations=[dict(text='Ingen data', xref='paper', yref='paper',
+                              xaxis_title=var, yaxis_title=_t('Antall'),
+                              annotations=[dict(text=_t('Ingen data'), xref='paper', yref='paper',
                                                 x=0.5, y=0.5, showarrow=False)])
             return fig
         # T2: winsoriser numerisk data før plot (ikke for diskrete/kategoriske)
@@ -6264,17 +6532,17 @@ class PlotHandler:
             has_labels = lm and lm.get_codelist_for_var(var)
             colors = self._bar_colors(n_bars, has_labels)
             fig = go.Figure(data=[go.Bar(x=vc.index.tolist(), y=vc.values, marker_color=colors)])
-            y_title = 'Prosent' if percent else 'Antall'
+            y_title = _t('Prosent') if percent else _t('Antall')
         else:
             if density:
                 histnorm = 'probability density'
-                y_title = 'Tetthet'
+                y_title = _t('Tetthet')
             elif percent:
                 histnorm = 'percent'
-                y_title = 'Prosent'
+                y_title = _t('Prosent')
             else:
                 histnorm = ''
-                y_title = 'Antall'
+                y_title = _t('Antall')
             fig = go.Figure(data=[go.Histogram(
                 x=s, nbinsx=nbins,
                 marker_color=PLOTLY_DEFAULT_GREEN,
@@ -6651,7 +6919,7 @@ class MicroInterpreter:
             val = m.group(2).lower().strip(';,')
             target = self._DIRECTIVE_TARGETS.get(key)
             if target is None:
-                self._log(f"// m2py: ukjent direktiv '{key}' — ignorert")
+                self._log(_t("// m2py: ukjent direktiv '{key}' — ignorert", key=key))
                 continue
             kind, storage_key = target
             if kind == 'global':
@@ -6661,35 +6929,35 @@ class MicroInterpreter:
                     '0' if val in self._DIRECTIVE_FALSY else None
                 )
                 if new_val is None:
-                    self._log(f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)")
+                    self._log(_t("// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (bruk on/off)", val=val, key=key))
                     continue
                 saved_key = ('global', storage_key)
                 if saved_key not in saved:
                     saved[saved_key] = globals().get(storage_key, '0')
                 globals()[storage_key] = new_val
+                _state_str = _t('PÅ') if new_val == '1' else _t('AV')
                 self._log(
-                    f"// m2py: {key} = "
-                    f"{'PÅ' if new_val == '1' else 'AV'} (satt fra script-direktiv)"
+                    _t("// m2py: {key} = {state} (satt fra script-direktiv)", key=key, state=_state_str)
                 )
             elif kind == 'global_str':
                 allowed = self._DIRECTIVE_ENUM_VALUES.get(storage_key)
                 if allowed and val not in allowed:
                     self._log(
-                        f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert "
-                        f"(tillatt: {', '.join(allowed)})"
+                        _t("// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (tillatt: {allowed_str})",
+                           val=val, key=key, allowed_str=', '.join(allowed))
                     )
                     continue
                 saved_key = ('global', storage_key)
                 if saved_key not in saved:
                     saved[saved_key] = globals().get(storage_key, (allowed[0] if allowed else None))
                 globals()[storage_key] = val
-                self._log(f"// m2py: {key} = {val} (satt fra script-direktiv)")
+                self._log(_t("// m2py: {key} = {val} (satt fra script-direktiv)", key=key, val=val))
             elif kind == 'default':
                 allowed = self._DIRECTIVE_ENUM_VALUES.get(storage_key)
                 if allowed and val not in allowed:
                     self._log(
-                        f"// m2py: ugyldig verdi '{val}' for '{key}' — ignorert "
-                        f"(tillatt: {', '.join(allowed)})"
+                        _t("// m2py: ugyldig verdi '{val}' for '{key}' — ignorert (tillatt: {allowed_str})",
+                           val=val, key=key, allowed_str=', '.join(allowed))
                     )
                     continue
                 d = globals().get('M2PY_DEFAULTS')
@@ -6700,7 +6968,7 @@ class MicroInterpreter:
                 if saved_key not in saved:
                     saved[saved_key] = d.get(storage_key, _M2PY_HARDCODED_FALLBACKS.get(storage_key))
                 d[storage_key] = val
-                self._log(f"// m2py: {key} = {val} (satt fra script-direktiv)")
+                self._log(_t("// m2py: {key} = {val} (satt fra script-direktiv)", key=key, val=val))
         return saved
 
     def _restore_script_directives(self, saved):
@@ -6771,8 +7039,9 @@ class MicroInterpreter:
         """
         if self._is_pseudonym_col(colname):
             raise ValueError(
-                f"{colname} er en pseudonymvariabel og kan ikke brukes i {context}. "
-                f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                _t("{colname} er en pseudonymvariabel og kan ikke brukes i {context}. "
+                   "Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on).",
+                   colname=colname, context=context)
             )
 
     def _check_numeric_var(self, colname, op):
@@ -6783,9 +7052,10 @@ class MicroInterpreter:
             return
         if self._is_string_col(colname):
             raise ValueError(
-                f"{colname} er en strengvariabel (alfanumerisk) i microdata.no — "
-                f"operasjonen '{op}' krever en numerisk variabel. "
-                f"Bruk frekvens/count i stedet (f.eks. tabulate)."
+                _t("{colname} er en strengvariabel (alfanumerisk) i microdata.no — "
+                   "operasjonen '{op}' krever en numerisk variabel. "
+                   "Bruk frekvens/count i stedet (f.eks. tabulate).",
+                   colname=colname, op=op)
             )
 
     # ─── Avsløringskontroll (T1, T5, T6, T7, T8) ───────────────────────────
@@ -6821,17 +7091,21 @@ class MicroInterpreter:
         # Forbudt: 1-9 endret
         if 0 < n_affected < _min_affected:
             raise ValueError(
-                f"{cmd} '{target_name}' påvirker bare {n_affected} av {n_total} enheter. "
-                f"microdata.no tillater ikke endringer som påvirker færre enn "
-                f"{_min_affected} enheter (unntak: alle eller ingen)."
+                _t("{cmd} '{target_name}' påvirker bare {n_affected} av {n_total} enheter. "
+                   "microdata.no tillater ikke endringer som påvirker færre enn "
+                   "{min_affected} enheter (unntak: alle eller ingen).",
+                   cmd=cmd, target_name=target_name, n_affected=n_affected, n_total=n_total,
+                   min_affected=_min_affected)
             )
         # Forbudt: alle bortsett fra <10 (dvs. n - affected ∈ 1..9)
         n_unchanged = n_total - n_affected
         if 0 < n_unchanged < _min_affected:
             raise ValueError(
-                f"{cmd} '{target_name}' lar bare {n_unchanged} av {n_total} enheter være "
-                f"uendret. microdata.no tillater ikke endringer som påvirker alle bortsett "
-                f"fra færre enn {_min_affected} enheter."
+                _t("{cmd} '{target_name}' lar bare {n_unchanged} av {n_total} enheter være "
+                   "uendret. microdata.no tillater ikke endringer som påvirker alle bortsett "
+                   "fra færre enn {min_affected} enheter.",
+                   cmd=cmd, target_name=target_name, n_unchanged=n_unchanged, n_total=n_total,
+                   min_affected=_min_affected)
             )
 
     def _check_t1_population(self, n, context):
@@ -6841,8 +7115,9 @@ class MicroInterpreter:
         _min_pop = _dc_threshold('dc_min_population')
         if n < _min_pop:
             raise ValueError(
-                f"Populasjonen er {n} enheter ({context}). microdata.no tillater ikke "
-                f"populasjoner med færre enn {_min_pop} enheter."
+                _t("Populasjonen er {n} enheter ({context}). microdata.no tillater ikke "
+                   "populasjoner med færre enn {min_pop} enheter.",
+                   n=n, context=context, min_pop=_min_pop)
             )
 
     def _check_t7_summarize_pop(self, n, cmd):
@@ -6852,9 +7127,10 @@ class MicroInterpreter:
         _min_pop = _dc_threshold('dc_min_summarize')
         if n < _min_pop:
             raise ValueError(
-                f"Populasjonen er {n} enheter. microdata.no krever minst "
-                f"{_min_pop} enheter for deskriptiv statistikk ({cmd}). "
-                f"Unntak: ren count/sum er tillatt."
+                _t("Populasjonen er {n} enheter. microdata.no krever minst "
+                   "{min_pop} enheter for deskriptiv statistikk ({cmd}). "
+                   "Unntak: ren count/sum er tillatt.",
+                   n=n, min_pop=_min_pop, cmd=cmd)
             )
 
     def _check_stats_args(self, cmd, args, df=None, condition=None):
@@ -6876,8 +7152,9 @@ class MicroInterpreter:
         def _maybe_check_pseudonym(varname):
             if self._is_pseudonym_col(varname):
                 raise ValueError(
-                    f"{varname} er en pseudonymvariabel og kan ikke brukes i {cmd}. "
-                    f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                    _t("{colname} er en pseudonymvariabel og kan ikke brukes i {context}. "
+                       "Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on).",
+                       colname=varname, context=cmd)
                 )
 
         def _check_expr_for_pseudonyms(expr):
@@ -6889,8 +7166,9 @@ class MicroInterpreter:
             for ident in set(re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', expr)):
                 if ident in cols and self._is_pseudonym_col(ident):
                     raise ValueError(
-                        f"{ident} er en pseudonymvariabel og kan ikke brukes i {cmd}-uttrykk. "
-                        f"Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on)."
+                        _t("{ident} er en pseudonymvariabel og kan ikke brukes i {cmd}-uttrykk. "
+                           "Pseudonymer kan kun brukes som nøkkel i collapse(by) eller merge(on).",
+                           ident=ident, cmd=cmd)
                     )
 
         if cmd in ('collapse', 'aggregate') and isinstance(args, dict):
@@ -7323,7 +7601,7 @@ class MicroInterpreter:
     @property
     def active_df(self):
         if not self.active_name:
-            raise ValueError("Ingen aktivt datasett. Bruk 'create-dataset' eller 'use'.")
+            raise ValueError(_t("Ingen aktivt datasett. Bruk 'create-dataset' eller 'use'."))
         return self.datasets[self.active_name]
 
     def run_script(self, script_text, echo_commands=None):
@@ -7380,9 +7658,9 @@ class MicroInterpreter:
                     # Avvis rent og hopp forbi HELE den ytre løkka (dybde-bevisst),
                     # slik at kroppen ikke delkjøres.
                     self._log(
-                        "FEIL: nøstede for...end-blokker støttes ikke i microdata.no. "
-                        "Bruk flere nivåer i én løkke med `;`, f.eks. "
-                        "`for i in 1:2; j in 3:4`."
+                        _t("FEIL: nøstede for...end-blokker støttes ikke i microdata.no. "
+                           "Bruk flere nivåer i én løkke med `;`, f.eks. "
+                           "`for i in 1:2; j in 3:4`.")
                     )
                     depth = 1
                     k = i + 1
@@ -7424,7 +7702,7 @@ class MicroInterpreter:
                 i = j + 1
                 continue
             if cmd == 'for' and isinstance(args, dict) and args.get('_for_error'):
-                self._log(f"FEIL: {args['_for_error']}")
+                self._log(_t("FEIL: {err}", err=args['_for_error']))
                 # Hopp over løkkebody fram til end
                 j = i + 1
                 while j < len(lines):
@@ -7517,9 +7795,9 @@ class MicroInterpreter:
                     # Avvis rent og hopp forbi HELE den ytre løkka (dybde-bevisst),
                     # slik at kroppen ikke delkjøres.
                     self._log(
-                        "FEIL: nøstede for...end-blokker støttes ikke i microdata.no. "
-                        "Bruk flere nivåer i én løkke med `;`, f.eks. "
-                        "`for i in 1:2; j in 3:4`."
+                        _t("FEIL: nøstede for...end-blokker støttes ikke i microdata.no. "
+                           "Bruk flere nivåer i én løkke med `;`, f.eks. "
+                           "`for i in 1:2; j in 3:4`.")
                     )
                     depth = 1
                     k = i + 1
@@ -7561,7 +7839,7 @@ class MicroInterpreter:
                 i = j + 1
                 continue
             if cmd == 'for' and isinstance(args, dict) and args.get('_for_error'):
-                self._log(f"FEIL: {args['_for_error']}")
+                self._log(_t("FEIL: {err}", err=args['_for_error']))
                 j = i + 1
                 while j < len(lines):
                     sub_instr = self.parser.parse_line(self._substitute_bindings(lines[j]))
@@ -7870,12 +8148,12 @@ class MicroInterpreter:
         columns = list(args.get('columns') or [])
         kwargs = dict(args.get('kwargs') or {})
         if not self.active_name or self.active_name not in self.datasets:
-            self._log("FEIL: scrub krever et aktivt datasett.")
+            self._log(_t("FEIL: scrub krever et aktivt datasett."))
             return
         try:
             import protect
         except Exception:
-            self._log("FEIL: protect-modulen (dataminimering) er ikke tilgjengelig.")
+            self._log(_t("FEIL: protect-modulen (dataminimering) er ikke tilgjengelig."))
             return
         df = self.datasets[self.active_name]
         key = _get_df_key_col(df)
@@ -7891,15 +8169,15 @@ class MicroInterpreter:
                 return
             if verb in COLUMN_VERBS:
                 if not columns:
-                    self._log(f"FEIL: scrub-{verb} krever minst én variabel, f.eks. scrub-{verb}(VARIABEL).")
+                    self._log(_t("FEIL: scrub-{verb} krever minst én variabel, f.eks. scrub-{verb}(VARIABEL).", verb=verb))
                     return
                 missing = [c for c in columns if c not in df.columns]
                 if missing:
-                    self._log(f"FEIL: ukjent(e) variabel(er) i scrub-{verb}: {', '.join(missing)}")
+                    self._log(_t("FEIL: ukjent(e) variabel(er) i scrub-{verb}: {missing_str}", verb=verb, missing_str=', '.join(missing)))
                     return
                 fn = getattr(protect, verb, None)
                 if fn is None:
-                    self._log(f"FEIL: ukjent scrub-verb: {verb}")
+                    self._log(_t("FEIL: ukjent scrub-verb: {verb}", verb=verb))
                     return
                 if key and 'unit_id' not in kwargs and verb != 'pseudonymize':
                     kwargs['unit_id'] = key
@@ -7907,15 +8185,15 @@ class MicroInterpreter:
                 if isinstance(res, tuple):
                     res = res[0]
                 self.datasets[self.active_name] = res
-                self._log(f"scrub-{verb} brukt på {', '.join(columns)}.")
+                self._log(_t("scrub-{verb} brukt på {columns_str}.", verb=verb, columns_str=', '.join(columns)))
                 return
             self._log(
-                f"FEIL: scrub-{verb} støttes ikke i microdata ennå. Tilgjengelig: "
-                "jitter, noise, winsorize, bin, coarsen, year, month, diff, shorten, "
-                "collapse, pseudonymize, swap, auto, risk."
+                _t("FEIL: scrub-{verb} støttes ikke i microdata ennå. Tilgjengelig: "
+                   "jitter, noise, winsorize, bin, coarsen, year, month, diff, shorten, "
+                   "collapse, pseudonymize, swap, auto, risk.", verb=verb)
             )
         except Exception as ex:
-            self._log(f"FEIL i scrub-{verb}: {ex}")
+            self._log(_t("FEIL i scrub-{verb}: {err}", verb=verb, err=ex))
 
     def _scrub_auto(self, df, columns, kwargs, key):
         """Type-bevisst default-minimering: dato→year, numerisk→jitter, ellers→collapse."""
@@ -7933,7 +8211,7 @@ class MicroInterpreter:
             else:
                 recipe[col] = {'collapse': {'rare_below': 5}}
         if not recipe:
-            self._log("scrub-auto: fant ingen variabler å beskytte.")
+            self._log(_t("scrub-auto: fant ingen variabler å beskytte."))
             return
         kw = dict(kwargs)
         if key and 'unit_id' not in kw:
@@ -7945,7 +8223,7 @@ class MicroInterpreter:
         else:
             new_df = res
         self.datasets[self.active_name] = new_df
-        self._log("scrub-auto brukt på: " + ", ".join(recipe.keys()))
+        self._log(_t("scrub-auto brukt på: {cols_str}", cols_str=", ".join(recipe.keys())))
         if log is not None and hasattr(log, 'to_text'):
             try:
                 self._log(log.to_text())
@@ -7961,8 +8239,8 @@ class MicroInterpreter:
         verb = (spec.get('verb') or '').lower()
         if verb in ('collapse', 'swap', 'risk'):
             self._log(
-                f"ADVARSEL: scrub-{verb} kjøres ikke ved import (avhenger av hele "
-                "datasettet). Kjør det som egen linje etter at datasettet er bygd."
+                _t("ADVARSEL: scrub-{verb} kjøres ikke ved import (avhenger av hele "
+                   "datasettet). Kjør det som egen linje etter at datasettet er bygd.", verb=verb)
             )
             return
         try:
@@ -7984,18 +8262,18 @@ class MicroInterpreter:
                 _tgt = (args.get('target') or '').strip()
                 if _tgt and not re.fullmatch(r'[\wøæåØÆÅ]+', _tgt):
                     self._log(
-                        f"FEIL: ugyldig variabelnavn '{_tgt}' i generate. "
-                        "Bruk $navn, ${navn}, eller navn ++ to_str(navn) "
-                        "for å interpolere bindinger."
+                        _t("FEIL: ugyldig variabelnavn '{tgt}' i generate. "
+                           "Bruk $navn, ${{navn}}, eller navn ++ to_str(navn) "
+                           "for å interpolere bindinger.", tgt=_tgt)
                     )
                     return
             if cmd in ('import', 'import-event') and isinstance(args, dict):
                 _raw_alias = args.get('_alias_raw')
                 if _raw_alias and not re.fullmatch(r'[\wøæåØÆÅ]+', _raw_alias):
                     self._log(
-                        f"FEIL: ugyldig alias '{_raw_alias}' i {cmd}. "
-                        "Bruk $navn, ${navn}, eller navn ++ to_str(navn) "
-                        "for å interpolere bindinger."
+                        _t("FEIL: ugyldig alias '{alias}' i {cmd}. "
+                           "Bruk $navn, ${{navn}}, eller navn ++ to_str(navn) "
+                           "for å interpolere bindinger.", alias=_raw_alias, cmd=cmd)
                     )
                     return
 
@@ -8014,7 +8292,7 @@ class MicroInterpreter:
                 try:
                     self._check_stats_args(cmd, args, df=_strict_df, condition=cond)
                 except ValueError as _strict_err:
-                    self._log(f"FEIL: {_strict_err}")
+                    self._log(_t("FEIL: {err}", err=_strict_err))
                     return
 
             # 0b. Scrub-kommandoer (dataminimering via protect)
@@ -8030,13 +8308,13 @@ class MicroInterpreter:
                 self.dataset_key_cols.pop(args[0], None)
                 # Tilnærmet microdata-tekst:
                 # "Et tomt datasett, X, ble opprettet og valgt"
-                self._log(f"Et tomt datasett, {args[0]}, ble opprettet og valgt")
+                self._log(_t("Et tomt datasett, {name}, ble opprettet og valgt", name=args[0]))
                 return
 
             if cmd == 'use':
                 self.active_name = args[0]
                 # "Datasettet X er valgt"
-                self._log(f"Datasettet {args[0]} er valgt")
+                self._log(_t("Datasettet {name} er valgt", name=args[0]))
                 return
 
             if cmd == 'require':
@@ -8046,14 +8324,14 @@ class MicroInterpreter:
                 source = parts[0] if parts else ''
                 alias = parts[-1] if len(parts) >= 3 and parts[-2].lower() == 'as' else (parts[-1] if parts else '')
                 if source and alias:
-                    self._log(f"Opprettet en kobling fra {source} til {alias}")
+                    self._log(_t("Opprettet en kobling fra {source} til {alias}", source=source, alias=alias))
                 else:
-                    self._log("Opprettet en (lokal) kobling")
+                    self._log(_t("Opprettet en (lokal) kobling"))
                 return  # No-op mot faktisk SSB, kun logg for kompatibilitet
 
             if cmd == 'clone-dataset':
                 self.datasets[args[1]] = self.datasets[args[0]].copy(deep=True)
-                self._log(f"Kopierte datasett {args[0]} til {args[1]}")
+                self._log(_t("Kopierte datasett {src} til {dst}", src=args[0], dst=args[1]))
                 return
 
             if cmd == 'clone-units':
@@ -8063,33 +8341,33 @@ class MicroInterpreter:
 
             if cmd == 'delete-dataset':
                 if isinstance(args, dict) and 'raw' in args:
-                    self._log("FEIL: delete-dataset krever datasettnavn.")
+                    self._log(_t("FEIL: delete-dataset krever datasettnavn."))
                     return
                 name = args[0]
                 if name not in self.datasets:
-                    self._log(f"FEIL: Datasett '{name}' finnes ikke.")
+                    self._log(_t("FEIL: Datasett '{name}' finnes ikke.", name=name))
                     return
                 del self.datasets[name]
                 if self.active_name == name:
                     self.active_name = next((n for n in self.datasets), None)
-                self._log(f"Slettet datasett: {name}")
+                self._log(_t("Slettet datasett: {name}", name=name))
                 return
 
             if cmd == 'rename-dataset':
                 if isinstance(args, dict) and 'raw' in args:
-                    self._log("FEIL: rename-dataset krever gammelt og nytt navn.")
+                    self._log(_t("FEIL: rename-dataset krever gammelt og nytt navn."))
                     return
                 old_name, new_name = args[0], args[1]
                 if old_name not in self.datasets:
-                    self._log(f"FEIL: Datasett '{old_name}' finnes ikke.")
+                    self._log(_t("FEIL: Datasett '{name}' finnes ikke.", name=old_name))
                     return
                 if new_name in self.datasets and new_name != old_name:
-                    self._log(f"FEIL: Datasett '{new_name}' finnes allerede.")
+                    self._log(_t("FEIL: Datasett '{name}' finnes allerede.", name=new_name))
                     return
                 self.datasets[new_name] = self.datasets.pop(old_name)
                 if self.active_name == old_name:
                     self.active_name = new_name
-                self._log(f"Omdøpte datasett '{old_name}' til '{new_name}'")
+                self._log(_t("Omdøpte datasett '{old_name}' til '{new_name}'", old_name=old_name, new_name=new_name))
                 return
 
             if cmd == 'merge':
@@ -8097,11 +8375,12 @@ class MicroInterpreter:
                 if isinstance(args, dict) and args.get('_multi_key_error'):
                     keys = args.get('keys', [])
                     self._log(
-                        f"FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
-                        f"Fikk {len(keys)} ({', '.join(keys)}). "
-                        f"Workaround: lag en composite key først:\n"
-                        f"  generate composite = string({keys[0]}) ++ \"_\" ++ string({keys[1]})\n"
-                        f"  merge ... into <ds> on composite"
+                        _t("FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
+                           "Fikk {n_keys} ({keys_str}). "
+                           "Workaround: lag en composite key først:\n"
+                           "  generate composite = string({key0}) ++ \"_\" ++ string({key1})\n"
+                           "  merge ... into <ds> on composite",
+                           n_keys=len(keys), keys_str=', '.join(keys), key0=keys[0], key1=keys[1])
                     )
                     return
                 # --- Ny syntaks: merge var-list into dataset [on variable] ---
@@ -8111,7 +8390,7 @@ class MicroInterpreter:
                     on_var    = args.get('on')
 
                     if into_name not in self.datasets:
-                        self._log(f"FEIL: Datasett '{into_name}' finnes ikke.")
+                        self._log(_t("FEIL: Datasett '{name}' finnes ikke.", name=into_name))
                         return
 
                     source_df = self.active_df
@@ -8145,30 +8424,35 @@ class MicroInterpreter:
                     if _res.status == 'error':
                         if _res.reason == _KEYS.ON_VAR_ONLY_IN_TARGET_NO_SRC_KEY:
                             self._log(
-                                f"FEIL: '{on_var}' finnes i {into_name}, men ikke i {self.active_name}. "
-                                f"Kilden {self.active_name} har heller ikke nøkkelkolonnen '{_res.src_key}'. "
-                                f"Tilgjengelige kolonner i {self.active_name}: {list(source_df.columns)}. "
-                                f"Bruk 'on <koblingsvariabel>' der koblingsvariabelen finnes i begge datasett."
+                                _t("FEIL: '{on_var}' finnes i {into_name}, men ikke i {active_name}. "
+                                   "Kilden {active_name} har heller ikke nøkkelkolonnen '{src_key}'. "
+                                   "Tilgjengelige kolonner i {active_name}: {source_cols}. "
+                                   "Bruk 'on <koblingsvariabel>' der koblingsvariabelen finnes i begge datasett.",
+                                   on_var=on_var, into_name=into_name, active_name=self.active_name,
+                                   src_key=_res.src_key, source_cols=list(source_df.columns))
                             )
                         elif _res.reason == _KEYS.ON_VAR_IN_NEITHER:
-                            self._log(f"FEIL: Koblingsvariabel '{on_var}' finnes ikke i noen av datasettene.")
+                            self._log(_t("FEIL: Koblingsvariabel '{on_var}' finnes ikke i noen av datasettene.", on_var=on_var))
                         else:  # NO_COMMON_KEY
                             _collapse_key = _src_collapse_key
                             _hint = (
-                                f" Kilden '{self.active_name}' ble laget med collapse by({_collapse_key}). "
-                                f"Hvis '{_collapse_key}' finnes i {into_name}, bruk: merge ... into {into_name} on {_collapse_key}"
+                                _t(" Kilden '{active_name}' ble laget med collapse by({collapse_key}). "
+                                   "Hvis '{collapse_key}' finnes i {into_name}, bruk: merge ... into {into_name} on {collapse_key}",
+                                   active_name=self.active_name, collapse_key=_collapse_key, into_name=into_name)
                             ) if _collapse_key else (
-                                f" Kolonner i {self.active_name}: {list(source_df.columns)}. "
-                                f"Kolonner i {into_name}: {list(target_df.columns)}."
+                                _t(" Kolonner i {active_name}: {source_cols}. "
+                                   "Kolonner i {into_name}: {target_cols}.",
+                                   active_name=self.active_name, source_cols=list(source_df.columns),
+                                   into_name=into_name, target_cols=list(target_df.columns))
                             )
-                            self._log(f"FEIL: Finner ingen felles koblingsvariabel mellom datasettene.{_hint}")
+                            self._log(_t("FEIL: Finner ingen felles koblingsvariabel mellom datasettene.{hint}", hint=_hint))
                         return
                     left_on, right_on = _res.left_on, _res.right_on
 
                     cols_from_source = [c for c in var_list if c in source_df.columns]
                     if not cols_from_source:
                         missing = [c for c in var_list if c not in source_df.columns]
-                        self._log(f"FEIL: {missing} finnes ikke i {self.active_name}.")
+                        self._log(_t("FEIL: {missing} finnes ikke i {active_name}.", missing=missing, active_name=self.active_name))
                         return
 
                     right_cols = list(dict.fromkeys([right_on] + cols_from_source))
@@ -8195,14 +8479,17 @@ class MicroInterpreter:
 
                     self.datasets[into_name] = merged
                     n_str = f"{len(merged):,}".replace(",", " ")
-                    self._log(f"Flettet {', '.join(cols_from_source)} fra {self.active_name} inn i {into_name} med {n_str} enheter")
+                    self._log(_t("Flettet {cols_str} fra {active_name} inn i {into_name} med {n_str} enheter",
+                                  cols_str=', '.join(cols_from_source), active_name=self.active_name,
+                                  into_name=into_name, n_str=n_str))
                     return
 
                 # --- Gammel syntaks: merge datasett-navn [, on(nøkkel)] ---
                 if args[0] not in self.datasets:
                     self._log(
-                        f"FEIL: Datasett '{args[0]}' finnes ikke. "
-                        f"Tilgjengelige datasett: {', '.join(self.datasets) or '(ingen)'}."
+                        _t("FEIL: Datasett '{name}' finnes ikke. "
+                           "Tilgjengelige datasett: {available}.",
+                           name=args[0], available=', '.join(self.datasets) or '(ingen)')
                     )
                     return
                 target_df = self.datasets[args[0]]
@@ -8215,11 +8502,12 @@ class MicroInterpreter:
                 if isinstance(on_opt, str) and len(on_opt.split()) > 1:
                     _keys = on_opt.split()
                     self._log(
-                        f"FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
-                        f"Fikk {len(_keys)} ({', '.join(_keys)}). "
-                        f"Workaround: lag en composite key først:\n"
-                        f"  generate composite = string({_keys[0]}) ++ \"_\" ++ string({_keys[1]})\n"
-                        f"  merge {args[0]}, on(composite)"
+                        _t("FEIL: microdata.no støtter bare én nøkkel-variabel i `on`. "
+                           "Fikk {n_keys} ({keys_str}). "
+                           "Workaround: lag en composite key først:\n"
+                           "  generate composite = string({key0}) ++ \"_\" ++ string({key1})\n"
+                           "  merge {ds}, on(composite)",
+                           n_keys=len(_keys), keys_str=', '.join(_keys), key0=_keys[0], key1=_keys[1], ds=args[0])
                     )
                     return
                 on_cols = on_opt.split() if isinstance(on_opt, str) else list(on_opt)
@@ -8232,10 +8520,12 @@ class MicroInterpreter:
                     ]
                     if _missing:
                         self._log(
-                            f"FEIL: Koblingsvariabel '{', '.join(_missing)}' finnes ikke "
-                            f"i både {self.active_name} og {args[0]}. "
-                            f"Kolonner i {self.active_name}: {list(self.active_df.columns)}. "
-                            f"Kolonner i {args[0]}: {list(target_df.columns)}."
+                            _t("FEIL: Koblingsvariabel '{missing_str}' finnes ikke "
+                               "i både {active_name} og {ds}. "
+                               "Kolonner i {active_name}: {active_cols}. "
+                               "Kolonner i {ds}: {target_cols}.",
+                               missing_str=', '.join(_missing), active_name=self.active_name, ds=args[0],
+                               active_cols=list(self.active_df.columns), target_cols=list(target_df.columns))
                         )
                         return
                 else:
@@ -8244,15 +8534,17 @@ class MicroInterpreter:
                         on_cols = list(set(self.active_df.columns) & set(target_df.columns))
                     if not on_cols:
                         self._log(
-                            f"FEIL: Fant ingen felles koblingsvariabel mellom "
-                            f"{self.active_name} og {args[0]}. Angi nøkkel med on(...)."
+                            _t("FEIL: Fant ingen felles koblingsvariabel mellom "
+                               "{active_name} og {ds}. Angi nøkkel med on(...).",
+                               active_name=self.active_name, ds=args[0])
                         )
                         return
                 self.datasets[self.active_name] = pd.merge(self.active_df, target_df, on=on_cols, how=how)
                 n_str = f"{len(self.datasets[self.active_name]):,}".replace(",", " ")
                 self._log(
-                    f"Flettet variabler fra {args[0]} inn i {self.active_name} "
-                    f"med {n_str} enheter (koblet på {', '.join(on_cols)})"
+                    _t("Flettet variabler fra {ds} inn i {active_name} "
+                       "med {n_str} enheter (koblet på {on_cols_str})",
+                       ds=args[0], active_name=self.active_name, n_str=n_str, on_cols_str=', '.join(on_cols))
                 )
                 return
 
@@ -8262,10 +8554,10 @@ class MicroInterpreter:
                     self.label_manager.define_labels(args['name'], args['pairs'])
                 else:
                     self._log(
-                        "FEIL: define-labels: ugyldig syntaks — forventer "
-                        "kodelistenavn etterfulgt av verdi/etikett-par, f.eks. "
-                        "define-labels yrke 1 'Ufaglært arbeider' 2 'Faglært'. "
-                        "Husk anførselstegn rundt etiketter med mellomrom."
+                        _t("FEIL: define-labels: ugyldig syntaks — forventer "
+                           "kodelistenavn etterfulgt av verdi/etikett-par, f.eks. "
+                           "define-labels yrke 1 'Ufaglært arbeider' 2 'Faglært'. "
+                           "Husk anførselstegn rundt etiketter med mellomrom.")
                     )
                 return
             if cmd == 'assign-labels':
@@ -8273,8 +8565,8 @@ class MicroInterpreter:
                     self.label_manager.assign_labels(args['var'], args['codelist'])
                 else:
                     self._log(
-                        "FEIL: assign-labels: ugyldig syntaks — forventer "
-                        "variabelnavn og kodelistenavn: assign-labels var kodeliste"
+                        _t("FEIL: assign-labels: ugyldig syntaks — forventer "
+                           "variabelnavn og kodelistenavn: assign-labels var kodeliste")
                     )
                 return
             if cmd == 'drop-labels':
@@ -8310,33 +8602,33 @@ class MicroInterpreter:
                     # Merk: disse innstillingene lagres men er ikke koblet inn i
                     # beregningene ennå. Vær ærlig om det i loggen i stedet for å
                     # gi inntrykk av at de virker ("Satt seed = 42").
-                    _NO_EFFECT = "(lagret, men påvirker ikke beregninger ennå)"
+                    _NO_EFFECT = _t("(lagret, men påvirker ikke beregninger ennå)")
                     if key == 'alpha' and len(args_list) >= 2:
                         try:
                             self._config['alpha'] = float(args_list[1])
-                            self._log(f"alpha = {self._config['alpha']} {_NO_EFFECT}")
+                            self._log(_t("alpha = {val} {no_effect}", val=self._config['alpha'], no_effect=_NO_EFFECT))
                         except ValueError:
-                            self._log(f"FEIL: Ugyldig alpha-verdi: {args_list[1]}")
+                            self._log(_t("FEIL: Ugyldig alpha-verdi: {val}", val=args_list[1]))
                     elif key == 'seed' and len(args_list) >= 2:
                         try:
                             self._config['seed'] = int(args_list[1])
-                            self._log(f"seed = {self._config['seed']} {_NO_EFFECT}")
+                            self._log(_t("seed = {val} {no_effect}", val=self._config['seed'], no_effect=_NO_EFFECT))
                         except ValueError:
-                            self._log(f"FEIL: Ugyldig seed-verdi: {args_list[1]}")
+                            self._log(_t("FEIL: Ugyldig seed-verdi: {val}", val=args_list[1]))
                     elif key == 'nocache':
                         self._config['cache'] = False
-                        self._log(f"cache av {_NO_EFFECT}")
+                        self._log(_t("cache av {no_effect}", no_effect=_NO_EFFECT))
                     elif key == 'cache':
                         self._config['cache'] = True
-                        self._log(f"cache på {_NO_EFFECT}")
+                        self._log(_t("cache på {no_effect}", no_effect=_NO_EFFECT))
                     else:
-                        self._log(f"configure: ukjent innstilling '{key}'")
+                        self._log(_t("configure: ukjent innstilling '{key}'", key=key))
                 return
 
             # history: vis liste over utførte kommandoer
             if cmd == 'history':
                 hist = self._command_history
-                lines_out = [f"\n--- Kommandohistorikk ({len(hist)} kommandoer) ---"]
+                lines_out = [_t("\n--- Kommandohistorikk ({n} kommandoer) ---", n=len(hist))]
                 for idx, h in enumerate(hist[-50:], 1):
                     lines_out.append(f"  {idx:3d}: {h}")
                 self._log("\n".join(lines_out) + "\n")
@@ -8347,9 +8639,9 @@ class MicroInterpreter:
                 args_list = args if isinstance(args, (list, tuple)) else []
                 topic = args_list[0] if args_list else ''
                 if topic:
-                    self._log(f"Hjelp for '{topic}': Se HTML-grensesnittet (microdata_runner.html) for fullstendig dokumentasjon.")
+                    self._log(_t("Hjelp for '{topic}': Se HTML-grensesnittet (microdata_runner.html) for fullstendig dokumentasjon.", topic=topic))
                 else:
-                    self._log("Bruk 'help <kommando>' eller 'help-function <funksjon>' for hjelp.")
+                    self._log(_t("Bruk 'help <kommando>' eller 'help-function <funksjon>' for hjelp."))
                 return
 
             # --- SIKRE AT VI HAR ET AKTIVT DATASETT HERFRA ---
@@ -8358,7 +8650,7 @@ class MicroInterpreter:
             # clear: tøm alle observasjoner i aktivt datasett
             if cmd == 'clear':
                 self.datasets[self.active_name] = pd.DataFrame(columns=df_target.columns)
-                self._log(f"Alle observasjoner i {self.active_name} er slettet")
+                self._log(_t("Alle observasjoner i {active_name} er slettet", active_name=self.active_name))
                 return
 
             # variables: vis variabler med type og kodeliste-info
@@ -8368,12 +8660,12 @@ class MicroInterpreter:
                     n_str = f"{len(df_target):,}".replace(",", " ")
                 except Exception:
                     n_str = str(len(df_target))
-                lines_out = [f"\n--- Variabler i {self.active_name} ({n_str} enheter) ---"]
+                lines_out = [_t("\n--- Variabler i {active_name} ({n_str} enheter) ---", active_name=self.active_name, n_str=n_str)]
                 for col in cols:
                     dtype = df_target[col].dtype
-                    type_str = 'numerisk' if pd.api.types.is_numeric_dtype(dtype) else 'tekst'
+                    type_str = _t('numerisk') if pd.api.types.is_numeric_dtype(dtype) else _t('tekst')
                     cl = self.label_manager.get_codelist_for_var(col) if self.label_manager else None
-                    lbl_info = f' [{len(cl)} kodeverdier]' if cl else ''
+                    lbl_info = _t(' [{n} kodeverdier]', n=len(cl)) if cl else ''
                     lines_out.append(f"  {col:<30} {type_str}{lbl_info}")
                 self._log("\n".join(lines_out) + "\n")
                 return
@@ -8421,9 +8713,10 @@ class MicroInterpreter:
                     _min_pop = _dc_threshold('dc_min_population')
                     if _n_new < _min_pop:
                         self._log(
-                            f"FEIL: {cmd} ville redusere populasjonen til {_n_new} enheter. "
-                            f"microdata.no krever minst {_min_pop} enheter per "
-                            f"populasjon. Datasettet er uendret."
+                            _t("FEIL: {cmd} ville redusere populasjonen til {n} enheter. "
+                               "microdata.no krever minst {min_pop} enheter per "
+                               "populasjon. Datasettet er uendret.",
+                               cmd=cmd, n=_n_new, min_pop=_min_pop)
                         )
                         return
                 if result is not None:
@@ -8445,10 +8738,10 @@ class MicroInterpreter:
                     if _t6_err is not None:
                         _err, _tn = _t6_err
                         # Revert: gjenopprett snapshot-verdier
-                        for _t, _snap in _t6_snapshots.items():
-                            if _t in _df_check.columns:
-                                _df_check[_t] = _snap.values
-                        self._log(f"FEIL: {_err}")
+                        for _tcol, _snap in _t6_snapshots.items():
+                            if _tcol in _df_check.columns:
+                                _df_check[_tcol] = _snap.values
+                        self._log(_t("FEIL: {err}", err=_err))
                         return
                 if _row_filter and result is not None:
                     _n_after = len(result)
@@ -8458,14 +8751,14 @@ class MicroInterpreter:
                     except Exception:
                         _b, _a = str(_n_before), str(_n_after)
                     if cmd == 'keep':
-                        self._log(f"({_a} av {_b} observasjoner beholdt)")
+                        self._log(_t("({a} av {b} observasjoner beholdt)", a=_a, b=_b))
                     else:  # drop
                         _d = _n_before - _n_after
                         try:
                             _ds = f"{_d:,}".replace(",", " ")
                         except Exception:
                             _ds = str(_d)
-                        self._log(f"({_ds} av {_b} observasjoner droppet)")
+                        self._log(_t("({d} av {b} observasjoner droppet)", d=_ds, b=_b))
                 return
 
             # 2a. Sample (tilfeldig uttrekk) – sample count|fraction seed
@@ -8482,7 +8775,7 @@ class MicroInterpreter:
                 else:
                     df_src = df_target
                 if df_src.empty:
-                    self._log("-> Sample: datasettet er tomt.")
+                    self._log(_t("-> Sample: datasettet er tomt."))
                     return
                 rng = np.random.default_rng(args['seed'])
                 n_total = len(df_src)
@@ -8496,13 +8789,15 @@ class MicroInterpreter:
                 _min_pop = _dc_threshold('dc_min_population')
                 if _is_disclosure_control() and n_keep < _min_pop:
                     self._log(
-                        f"FEIL: sample ville redusere populasjonen til {n_keep} enheter. "
-                        f"microdata.no krever minst {_min_pop} enheter per "
-                        f"populasjon. Datasettet er uendret."
+                        _t("FEIL: {cmd} ville redusere populasjonen til {n} enheter. "
+                           "microdata.no krever minst {min_pop} enheter per "
+                           "populasjon. Datasettet er uendret.",
+                           cmd='sample', n=n_keep, min_pop=_min_pop)
                     )
                     return
                 self.datasets[self.active_name] = df_src.loc[idx].reset_index(drop=True)
-                self._log(f"-> Sample: beholdt {n_keep} av {n_total} observasjoner (seed={args['seed']}).")
+                self._log(_t("-> Sample: beholdt {n_keep} av {n_total} observasjoner (seed={seed}).",
+                              n_keep=n_keep, n_total=n_total, seed=args['seed']))
                 return
 
             # 2b. If-maskering: bare for kommandoer som bruker cond som delmengde
@@ -8521,8 +8816,8 @@ class MicroInterpreter:
                 # Kommandoen verken filtrerer eller maskerer på betingelsen —
                 # si det høyt i stedet for å stille ignorere den.
                 self._log(
-                    f"ADVARSEL: 'if'-betingelse støttes ikke for kommandoen "
-                    f"'{cmd}' — betingelsen er ignorert."
+                    _t("ADVARSEL: 'if'-betingelse støttes ikke for kommandoen "
+                       "'{cmd}' — betingelsen er ignorert.", cmd=cmd)
                 )
             if cond and cmd == 'generate':
                 opts = dict(opts)
@@ -8537,13 +8832,14 @@ class MicroInterpreter:
                 _var_entity = _vmeta.get('entity_type', 'person')
                 _ds_entity  = self.dataset_entity_types.get(self.active_name)
                 if _ds_entity is not None and _var_entity != _ds_entity:
-                    _ds_disp  = _ENTITY_DISPLAY.get(_ds_entity, _ds_entity)
-                    _var_disp = _ENTITY_DISPLAY.get(_var_entity, _var_entity)
+                    _ds_disp  = _t(_ENTITY_DISPLAY.get(_ds_entity, _ds_entity))
+                    _var_disp = _t(_ENTITY_DISPLAY.get(_var_entity, _var_entity))
                     self._log(
-                        f"FEIL: Kan ikke importere «{_vshort}» (enhetstype: {_var_disp}) "
-                        f"inn i et datasett av typen {_ds_disp}.\n"
-                        f"Variabler med ulik enhetstype må ligge i separate datasett og "
-                        f"kombineres via collapse og merge."
+                        _t("FEIL: Kan ikke importere «{vshort}» (enhetstype: {var_disp}) "
+                           "inn i et datasett av typen {ds_disp}.\n"
+                           "Variabler med ulik enhetstype må ligge i separate datasett og "
+                           "kombineres via collapse og merge.",
+                           vshort=_vshort, var_disp=_var_disp, ds_disp=_ds_disp)
                     )
                     return
                 # Oppdater datasett-entitetstype ved første import
@@ -8557,13 +8853,14 @@ class MicroInterpreter:
                     if _temp and _temp.lower() != 'fast' and not _date1:
                         _vpath_disp = args.get('var', _vshort)
                         self._log(
-                            f"FEIL: «{_vshort}» er en {_temp}-variabel og krever en importdato.\n"
-                            f"Legg til dato i kommandoen: import {_vpath_disp} ÅÅÅÅ-MM-DD"
+                            _t("FEIL: «{vshort}» er en {temp}-variabel og krever en importdato.\n"
+                               "Legg til dato i kommandoen: import {vpath_disp} ÅÅÅÅ-MM-DD",
+                               vshort=_vshort, temp=_temp, vpath_disp=_vpath_disp)
                         )
                         return
                     if _temp.lower() == 'fast' and _date1:
                         self._log(
-                            f"ADVARSEL: «{_vshort}» er en Fast-variabel — dato ignoreres."
+                            _t("ADVARSEL: «{vshort}» er en Fast-variabel — dato ignoreres.", vshort=_vshort)
                         )
                     # Dato-validering mot Gyldighetsperiode (det årlige rutenettet).
                     # Streng i static-modus (ingen data finnes ellers); advarsel i dynamic.
@@ -8575,20 +8872,22 @@ class MicroInterpreter:
                         # tydelig at variabelen er avsluttet hvis året er for høyt.
                         _yr = _date1[:4]
                         _too_late = _yr > _last[:4]
-                        _hint = (f" Variabelen er avsluttet i {_last[:4]} — for nyere år, bruk en "
-                                 f"variant som er gyldig da (f.eks. en annen årgang/registerversjon "
-                                 f"av samme variabel).") if _too_late else ""
+                        _hint = _t(" Variabelen er avsluttet i {last_yr} — for nyere år, bruk en "
+                                   "variant som er gyldig da (f.eks. en annen årgang/registerversjon "
+                                   "av samme variabel).", last_yr=_last[:4]) if _too_late else ""
                         _static_mode = (globals().get('M2PY_DATA_SOURCE', 'dynamic') == 'static'
                                         and getattr(self, 'static_source', None) is not None)
                         if _static_mode:
                             self._log(
-                                f"FEIL: «{_vshort}» har ingen gyldig importdato {_date1}. "
-                                f"Gyldige datoer er årlige fra {_first} til {_last}.{_hint}"
+                                _t("FEIL: «{vshort}» har ingen gyldig importdato {date1}. "
+                                   "Gyldige datoer er årlige fra {first} til {last}.{hint}",
+                                   vshort=_vshort, date1=_date1, first=_first, last=_last, hint=_hint)
                             )
                             return
                         self._log(
-                            f"ADVARSEL: {_date1} er ikke en standard importdato for «{_vshort}» "
-                            f"(gyldige er årlige fra {_first} til {_last}).{_hint}"
+                            _t("ADVARSEL: {date1} er ikke en standard importdato for «{vshort}» "
+                               "(gyldige er årlige fra {first} til {last}).{hint}",
+                               date1=_date1, vshort=_vshort, first=_first, last=_last, hint=_hint)
                         )
 
                 # Datakilde: statiske filer (hvis aktivt og tilgjengelig) ellers generering.
@@ -8605,7 +8904,7 @@ class MicroInterpreter:
                     try:
                         new_data = self.static_source.generate(cmd, args, _gen_target)
                     except Exception as _se:
-                        self._log(f"(static-kilde feilet, faller tilbake til generering: {_se})")
+                        self._log(_t("(static-kilde feilet, faller tilbake til generering: {err})", err=_se))
                         new_data = None
                 if new_data is None:
                     new_data = self.data_engine.generate(cmd, args, _gen_target)
@@ -8613,9 +8912,9 @@ class MicroInterpreter:
                 # og vi falt tilbake til demo-verdier (etiketter/fordelinger kan avvike).
                 for _w in self.data_engine.drain_fallback_warnings():
                     self._log(
-                        f"ADVARSEL: klarte ikke å laste ekstern metadata/kodeliste for "
-                        f"'{_w}' — bruker innebygde demo-verdier. Etiketter og fordelinger "
-                        f"kan avvike fra det ekte registeret."
+                        _t("ADVARSEL: klarte ikke å laste ekstern metadata/kodeliste for "
+                           "'{w}' — bruker innebygde demo-verdier. Etiketter og fordelinger "
+                           "kan avvike fra det ekte registeret.", w=_w)
                     )
                 # Omdøp unit_id → enhetstype-korrekt nøkkelkolonne (f.eks. PERSONID_1 for persondata)
                 _id_col = _ENTITY_ID_COL.get(_var_entity, 'unit_id')
@@ -8680,7 +8979,8 @@ class MicroInterpreter:
                     var_list = args.get('vars') or []
                     short_names = [v.split('/')[-1] if '/' in v else v for v in var_list]
                     var_desc = ", ".join(short_names) if short_names else '?'
-                    msg = f"Importerte {var_desc} som paneldata til {self.active_name} med {n_str} enheter"
+                    msg = _t("Importerte {var_desc} som paneldata til {active_name} med {n_str} enheter",
+                             var_desc=var_desc, active_name=self.active_name, n_str=n_str)
                 else:
                     var_path = args.get('var', '')
                     short = var_path.split('/')[-1] if var_path else var_path or '?'
@@ -8695,17 +8995,20 @@ class MicroInterpreter:
                     date1 = args.get('date1')
                     date2 = args.get('date2')
                     if date1 and date2:
-                        base = f"Importerte {short} i perioden {date1} til {date2} som {alias} til {self.active_name} med {n_str} enheter"
+                        base = _t("Importerte {short} i perioden {date1} til {date2} som {alias} til {active_name} med {n_str} enheter",
+                                  short=short, date1=date1, date2=date2, alias=alias, active_name=self.active_name, n_str=n_str)
                     elif date1:
-                        base = f"Importerte {short} på datoen {date1} som {alias} til {self.active_name} med {n_str} enheter"
+                        base = _t("Importerte {short} på datoen {date1} som {alias} til {active_name} med {n_str} enheter",
+                                  short=short, date1=date1, alias=alias, active_name=self.active_name, n_str=n_str)
                     else:
-                        base = f"Importerte {short} som {alias} til {self.active_name} med {n_str} enheter"
+                        base = _t("Importerte {short} som {alias} til {active_name} med {n_str} enheter",
+                                  short=short, alias=alias, active_name=self.active_name, n_str=n_str)
                     if missing is not None and missing > 0:
                         try:
                             miss_str = f"{missing:,}".replace(",", " ")
                         except Exception:
                             miss_str = str(missing)
-                        base += f", hvorav {miss_str} missingverdier"
+                        base += _t(", hvorav {miss_str} missingverdier", miss_str=miss_str)
                     msg = base
 
                 self._log(msg)
@@ -8730,7 +9033,7 @@ class MicroInterpreter:
                     try:
                         self._check_t7_summarize_pop(len(df_target), cmd)
                     except ValueError as _t7_err:
-                        self._log(f"FEIL: {_t7_err}")
+                        self._log(_t("FEIL: {err}", err=_t7_err))
                         return
                 # Egen logging for generate / collapse, mer microdata-lignende
                 if cmd == 'generate':
@@ -8756,7 +9059,7 @@ class MicroInterpreter:
                                 df_after[target] = _t6_before.values
                             else:
                                 df_after.drop(columns=[target], inplace=True, errors='ignore')
-                            self._log(f"FEIL: {_t6_err}")
+                            self._log(_t("FEIL: {err}", err=_t6_err))
                             return
                     if target and target in df_after.columns:
                         n = len(df_after)
@@ -8769,13 +9072,13 @@ class MicroInterpreter:
                             missing = int(df_after[target].isna().sum())
                         except Exception:
                             missing = None
-                        msg = f"Genererte {target} med {n_str} enheter"
+                        msg = _t("Genererte {target} med {n_str} enheter", target=target, n_str=n_str)
                         if missing is not None and missing > 0:
                             try:
                                 miss_str = f"{missing:,}".replace(",", " ")
                             except Exception:
                                 miss_str = str(missing)
-                            msg += f", hvorav {miss_str} missingverdier"
+                            msg += _t(", hvorav {miss_str} missingverdier", miss_str=miss_str)
                         self._log(msg)
                     return
 
@@ -8793,9 +9096,11 @@ class MicroInterpreter:
                     except Exception:
                         after_str = str(after_n)
                     if by_var:
-                        self._log(f"Aggregerte {self.active_name} gruppert på {by_var} til {after_str} verdier")
+                        self._log(_t("Aggregerte {active_name} gruppert på {by_var} til {after_str} verdier",
+                                      active_name=self.active_name, by_var=by_var, after_str=after_str))
                     else:
-                        self._log(f"Aggregerte {self.active_name} til {after_str} verdier")
+                        self._log(_t("Aggregerte {active_name} til {after_str} verdier",
+                                      active_name=self.active_name, after_str=after_str))
                 elif result is not None:
                     header = f"\n--- Output: {cmd} ---\n"
                     if isinstance(result, (pd.DataFrame, pd.Series)):
@@ -8857,7 +9162,7 @@ class MicroInterpreter:
                     import plotly.io as pio
                     self._log_embed('figure', pio.to_json(fig))
                 else:
-                    self._log(f"  FEIL PÅ KOMMANDO '{cmd}': Kunne ikke generere figur.")
+                    self._log(_t("  FEIL PÅ KOMMANDO '{cmd}': Kunne ikke generere figur.", cmd=cmd))
                 return
 
             # 5. Overlevelsesanalyse (cox, kaplan-meier, weibull)
@@ -8887,7 +9192,7 @@ class MicroInterpreter:
                 reg_cmd = args.get('reg_cmd', 'regress') if isinstance(args, dict) else 'regress'
                 reg_vars = args.get('vars', []) if isinstance(args, dict) else list(args)
                 if not reg_vars:
-                    self._log("  FEIL: coefplot krever avhengig variabel og minst én uavhengig variabel.")
+                    self._log(_t("  FEIL: coefplot krever avhengig variabel og minst én uavhengig variabel."))
                     return
                 model, dep_var, indep_vars, df_clean = self.reg_engine._fit_simple(
                     reg_cmd, df_target, reg_vars, opts
@@ -8917,12 +9222,12 @@ class MicroInterpreter:
                     ) if err_minus is not None else None,
                 ))
                 fig.add_vline(x=0, line_dash='dot', line_color='#9ca3af', line_width=1)
-                std_label = " (standardisert)" if opts.get('standardize') else ""
+                std_label = _t(" (standardisert)") if opts.get('standardize') else ""
                 fig.update_layout(
                     template='plotly_white',
                     margin=dict(l=50, r=50, t=40, b=60),
-                    xaxis_title=f"Koeffisient{std_label}",
-                    yaxis_title="Variabel",
+                    xaxis_title=_t("Koeffisient{std_label}", std_label=std_label),
+                    yaxis_title=_t("Variabel"),
                     yaxis=dict(autorange='reversed'),
                     height=max(300, len(names) * 45 + 120),
                 )
@@ -8933,11 +9238,11 @@ class MicroInterpreter:
             if cmd in ['regress', 'logit', 'probit', 'poisson', 'negative-binomial', 'negative-binomial-predict', 'regress-panel', 'regress-panel-predict', 'regress-panel-diff', 'hausman', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'rdd']:
                 result = self.reg_engine.execute(cmd, df_target, args, opts)
                 summary, extra = result if isinstance(result, tuple) else (result, None)
-                self._log(f"\n--- Modell: {cmd} ---\n{summary}\n")
+                self._log(_t("\n--- Modell: {cmd} ---\n{summary}\n", cmd=cmd, summary=summary))
                 if extra:
                     for col_name, series in extra.items():
                         self.datasets[self.active_name][col_name] = series
-                    self._log(f"  -> Lagt til variabler: {list(extra.keys())}")
+                    self._log(_t("  -> Lagt til variabler: {names}", names=list(extra.keys())))
                 return
 
             # Ingen handler traff — si fra i stedet for stille no-op
@@ -8945,20 +9250,20 @@ class MicroInterpreter:
             # lot seg tolke slik at kommando-grenen hoppet over dem).
             if cmd in ('for', 'end', 'textblock', 'endblock'):
                 self._log(
-                    f"FEIL: '{cmd}' er ikke gyldig her. Nøstede for-løkker "
-                    f"støttes ikke, og 'end'/'endblock' må ha en tilhørende "
-                    f"'for'/'textblock'."
+                    _t("FEIL: '{cmd}' er ikke gyldig her. Nøstede for-løkker "
+                       "støttes ikke, og 'end'/'endblock' må ha en tilhørende "
+                       "'for'/'textblock'.", cmd=cmd)
                 )
             elif isinstance(args, dict) and 'raw' in args:
                 self._log(
-                    f"FEIL: Kunne ikke tolke argumentene til '{cmd}': "
-                    f"«{args['raw']}». Sjekk syntaksen med `help {cmd}`."
+                    _t("FEIL: Kunne ikke tolke argumentene til '{cmd}': "
+                       "«{raw}». Sjekk syntaksen med `help {cmd}`.", cmd=cmd, raw=args['raw'])
                 )
             else:
-                self._log(f"FEIL: Ukjent kommando '{cmd}'.")
+                self._log(_t("FEIL: Ukjent kommando '{cmd}'.", cmd=cmd))
 
         except Exception as e:
-            self._log(f"  FEIL PÅ KOMMANDO '{cmd}' ({type(e).__name__}): {str(e)}")
+            self._log(_t("  FEIL PÅ KOMMANDO '{cmd}' ({err_type}): {err}", cmd=cmd, err_type=type(e).__name__, err=str(e)))
 
     def _log(self, msg, indent=True):
         # Microdata-lignende: forklaringer/kommentarer under kommandoen innrykket med to mellomrom.
