@@ -8,7 +8,9 @@
 
 This is the synchronous core of what the safestat spec calls ``/run_extended``.
 The submit-then-poll wrapper (background task + ``task_id``) is deliberately not
-here yet; it wraps this function without changing it.
+here yet; it wraps this function without changing it. The ``on_result`` hook
+exists precisely for that wrapper: it streams each released statement while the
+run is still executing.
 
 Pipeline:  policy -> gate -> sandbox -> mediate.  Each stage can only ever
 *reduce* what is releasable; there is no path around the mediator.
@@ -105,7 +107,8 @@ def run(code: str,
         *, profile: Profile | str | None = None,
         suppression=None,
         dialect: str = "pandas",
-        render: str = "spec") -> SafeResult:
+        render: str = "spec",
+        on_result=None) -> SafeResult:
     """Validate, run, and disclosure-check ``code`` against ``sources``.
 
     ``sources`` maps the names user code may reference (e.g. ``{"df": frame}``)
@@ -115,10 +118,18 @@ def run(code: str,
     (``"light"``/``"standard"``/``"microdata"``) or a ``Suppression`` instance.
     ``render`` picks the transport encoding for chart results:
     ``spec`` (default, JSON) | ``plotly`` | ``png`` | ``html`` | ``ascii``.
+
+    ``on_result`` (optional): called with each released ``SafeResult`` as its
+    statement finishes — mediation is interleaved with execution, so a caller
+    can stream partial results (the submit-then-poll wrapper uses this).
+    Refused statements are not reported; callback exceptions are swallowed.
+    Only the pandas/polars gate path is multi-statement; the r/duckdb/he
+    paths produce a single result and ignore the hook.
     """
     policy: Policy = resolve_policy([level], suppression=suppression)
     active = Profile(profile) if profile is not None else policy.profile
     catalog = None  # datasets left in the session (populated once execution runs)
+    outcomes = []   # per bare expression: ("ok", SafeResult) | ("refused", DisclosureError)
 
     if dialect == "python":
         # meta-dialect: the library is chosen by the code itself (a polars import),
@@ -161,13 +172,12 @@ def run(code: str,
             assert gate.error is not None
             return SafeResult(ok=False, kind="error", error=gate.error.as_dict())
 
-        expr_values, ns = execute(code, namespace, allow_imports=imports_ok)
-        catalog = _build_catalog(ns, policy)
-
         # Each top-level bare expression is a potential result. Releasable ones are
         # collected; the last expression is the "primary" (top-level fields), which
         # may be a refusal (backward compatible). Non-releasable intermediates
-        # (e.g. cph.fit()) are skipped.
+        # (e.g. cph.fit()) are skipped. Mediation is interleaved with execution
+        # (via on_expr) so released results can be streamed while later
+        # statements are still running.
         def _stamp(res):
             res.audit.setdefault("level", policy.level.value)
             res.audit.setdefault("profile", active.value)
@@ -178,20 +188,30 @@ def run(code: str,
                 res.audit["render"] = render
             return res
 
-        results, primary = [], None
-        for i, value in enumerate(expr_values):
-            is_last = i == len(expr_values) - 1
+        def _mediate_expr(value):
             try:
                 res = _stamp(mediate(value, policy))
             except DisclosureError as exc:
-                if is_last:  # keep the last refusal as the primary (ok=False)
-                    primary = SafeResult(ok=False, kind="error",
-                                         error={"kind": type(exc).__name__, "message": str(exc)})
-                continue
-            results.append(res)
-            if is_last:
-                primary = res
+                outcomes.append(("refused", exc))
+                return
+            outcomes.append(("ok", res))
+            if on_result is not None:
+                try:
+                    on_result(res)
+                except Exception:  # noqa: BLE001 - progress is best-effort
+                    pass           # a bad callback must never kill the run
 
+        expr_values, ns = execute(code, namespace, allow_imports=imports_ok,
+                                  on_expr=_mediate_expr)
+        catalog = _build_catalog(ns, policy)
+
+        results = [res for tag, res in outcomes if tag == "ok"]
+        primary = None
+        if outcomes:
+            tag, last = outcomes[-1]
+            primary = last if tag == "ok" else SafeResult(
+                ok=False, kind="error",
+                error={"kind": type(last).__name__, "message": str(last)})
         if primary is None:  # no bare expressions (datasets-only) -> catalog only
             primary = SafeResult(ok=True, kind="none")
         primary.results = results
@@ -199,12 +219,15 @@ def run(code: str,
         return primary
 
     except ValidationError as exc:
-        return SafeResult(ok=False, kind="error", error=exc.as_dict(), catalog=catalog)
+        return SafeResult(ok=False, kind="error", error=exc.as_dict(), catalog=catalog,
+                          results=[r for tag, r in outcomes if tag == "ok"])
     except (DisclosureError, SandboxError) as exc:
         return SafeResult(ok=False, kind="error", catalog=catalog,
+                          results=[r for tag, r in outcomes if tag == "ok"],
                           error={"kind": type(exc).__name__, "message": str(exc)})
     except SafePythonError as exc:  # pragma: no cover - catch-all, still no data leak
         return SafeResult(ok=False, kind="error", catalog=catalog,
+                          results=[r for tag, r in outcomes if tag == "ok"],
                           error={"kind": "SafePythonError", "message": str(exc)})
 
 

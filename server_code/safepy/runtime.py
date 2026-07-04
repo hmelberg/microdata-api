@@ -61,7 +61,7 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     raise ImportError(f"module '{name}' is not available in safepy")
 
 
-def execute(code: str, namespace: dict, *, allow_imports: bool = False):
+def execute(code: str, namespace: dict, *, allow_imports: bool = False, on_expr=None):
     """Run gated ``code`` and return ``(expr_values, ns)``.
 
     ``expr_values`` is the value of every top-level *bare expression* in the
@@ -69,6 +69,10 @@ def execute(code: str, namespace: dict, *, allow_imports: bool = False):
     are executed for their side effects. ``ns`` is the post-execution namespace —
     the authoritative record of every bound name (used for the dataset catalog).
     ``__builtins__`` is overwritten here.
+
+    ``on_expr`` (optional) is called with each bare-expression value immediately
+    after it is evaluated — before the next statement runs — so callers can
+    mediate and stream results while execution progresses.
     """
     ns = dict(namespace)
     builtins = dict(_SAFE_BUILTINS)
@@ -82,8 +86,10 @@ def execute(code: str, namespace: dict, *, allow_imports: bool = False):
     try:
         for stmt in tree.body:
             if isinstance(stmt, ast.Expr):
-                expr_values.append(
-                    eval(compile(ast.Expression(body=stmt.value), "<safepy>", "eval"), ns))
+                value = eval(compile(ast.Expression(body=stmt.value), "<safepy>", "eval"), ns)
+                expr_values.append(value)
+                if on_expr is not None:
+                    on_expr(value)
             else:
                 exec(compile(ast.Module(body=[stmt], type_ignores=[]), "<safepy>", "exec"), ns)
     except SafePythonError:

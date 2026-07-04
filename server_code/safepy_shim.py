@@ -44,11 +44,16 @@ _HE_VARIANT = {"pandas": "he", "he": "he", "r": "r-he", "r-he": "r-he",
 _LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
 
 
-def run_extended(script, sources_req, dialect="pandas"):
+def run_extended(script, sources_req, dialect="pandas", on_progress=None):
     """Execute `script` in `dialect` against registry sources via safepy STRICT.
 
     Levels and locations come from the registry only — never the request. The
     most restrictive source level selects the safepy policy tier.
+
+    ``on_progress`` (optional): called with one client-shaped fragment dict —
+    {"kind": "html"|"note", "html": ...} — per released statement while the run
+    is still executing. Charts are deferred to the final render (a "note"
+    placeholder streams instead). Transport (task_state) is the caller's concern.
     """
     from source_registry import resolve_source, load_dataframe, load_encrypted_source
 
@@ -105,8 +110,14 @@ def run_extended(script, sources_req, dialect="pandas"):
     # profile="strict" is mandatory: safepy's own policy would give the
     # protected level the OPEN sandbox (safepy/policy.py), and only the STRICT
     # capability facade is safe-by-construction for user-supplied code.
+    cb = None
+    if on_progress is not None:
+        def cb(res):
+            frag = _leaf_fragment(res._leaf())
+            if frag is not None:
+                on_progress(frag)
     res = safepy.run(script, frames, level=level, profile="strict",
-                     dialect=effective, render="plotly")
+                     dialect=effective, render="plotly", on_result=cb)
     d = res.as_dict()
     out = _to_client_shape(script, d)
     import query_audit
@@ -232,3 +243,17 @@ def _leaf_html(kind, payload):
         return f"<pre>{_esc(json.dumps(payload, indent=2, default=str))}</pre>"
     except (TypeError, ValueError):
         return f"<pre>{_esc(payload)}</pre>"
+
+
+def _leaf_fragment(leaf):
+    """One streamed leaf -> a small client fragment for task_state. Charts are
+    deferred to the final render (plotly JSON is too large to re-ship on every
+    poll); everything else reuses the exact HTML the final results list will
+    contain, so the progressive view and the final view can never disagree."""
+    if leaf.get("kind") in ("chart", "plot"):
+        return {"kind": "note",
+                "html": '<pre style="opacity:.6">(figur klar — vises når kjøringen er fullført)</pre>'}
+    html_frag = _leaf_html(leaf.get("kind"), leaf.get("payload"))
+    if not html_frag:
+        return None
+    return {"kind": "html", "html": html_frag}
