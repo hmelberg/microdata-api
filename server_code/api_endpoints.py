@@ -559,9 +559,32 @@ def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
     t0 = time.time()
     status, err_msg = "ok", None
     out = None
+
+    # Progressive release: mediated fragments stream into task_state so the
+    # /run_extended_status poll can show them while the run executes. Capped at
+    # ~100 KB of fragments (task_state must stay small); past the cap only the
+    # `done` counter advances and the full results arrive in the final blob.
+    partial, done, budget = [], [0], [100_000]
+
+    def _on_progress(frag):
+        done[0] += 1
+        try:
+            size = len(json.dumps(frag))
+        except (TypeError, ValueError):
+            size = None
+        if size is not None and size <= budget[0]:
+            budget[0] -= size
+            partial.append(frag)
+        try:
+            anvil.server.task_state["partial"] = list(partial)
+            anvil.server.task_state["done"] = done[0]
+        except Exception:
+            pass  # progress is best-effort; never break the run
+
     try:
         if dialect in safepy_shim.SAFEPY_DIALECTS:
-            out = safepy_shim.run_extended(script, sources_req, dialect=dialect)
+            out = safepy_shim.run_extended(script, sources_req, dialect=dialect,
+                                           on_progress=_on_progress)
         else:
             out = m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
         if isinstance(out, dict) and out.get("err"):
@@ -649,7 +672,15 @@ def http_run_extended_status(**kwargs):
     if task is None:
         return _json({"error": "task not found"}, status=404)
     if not task.is_completed():
-        return _json({"status": "running"})
+        resp = {"status": "running"}
+        try:
+            state = task.get_state() or {}
+        except Exception:
+            state = {}
+        if state.get("done"):
+            resp["done"] = state["done"]
+            resp["partial"] = state.get("partial") or []
+        return _json(resp)
     term = task.get_termination_status()
     if term == "completed":
         return _json({"status": "completed", "result": task.get_return_value()})
