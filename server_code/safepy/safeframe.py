@@ -38,7 +38,7 @@ import pandas as pd
 from ._payload import frame_payload, series_payload
 from .errors import DisclosureError
 from .result import Released
-from .safe import SafeVerbs, _stop_if_too_sparse, _noise_count_table, _cell_noise
+from .safe import SafeVerbs, _cell_noise
 from .stats import _num
 
 try:
@@ -661,20 +661,17 @@ class SafeColumn:
 
     # -- frequency table of this column -> Released table --
     def value_counts(self, *, min_n=None, round=None) -> Released:
+        # Delegate to the same fingerprinted release helper the SafeFrame
+        # facade uses (SafeVerbs._release_value_counts), so this idiomatic
+        # `df['col'].value_counts()` path shares one audited suppression
+        # pipeline with `safe.value_counts(df, col)` / `df.value_counts(col)`
+        # instead of duplicating it (and drifting, as it previously had —
+        # no groups_sig/count_hist fingerprint; see test_audit_fingerprint.py).
         if protect is None:
             raise DisclosureError("the 'protect' package is required")
-        k = self._verbs._min_n(min_n)
         counts = self._s.value_counts()
-        policy = self._verbs._policy
-        _stop_if_too_sparse(counts.to_numpy(), policy)
-        noising = bool(policy.suppression.count_noise)
-        safe = protect.suppress(counts, counts=counts, min_n=k,
-                                round=None if noising else self._verbs._round(round))
-        if noising:
-            safe = _noise_count_table(safe, policy)
-        return Released(series_payload(safe, name=f"count({self._s.name})"), audit={
-            "kind": "table", "verb": "value_counts", "min_n": k,
-            "cells_suppressed": int((counts < k).sum()), "backend": "pandas"})
+        return self._verbs._release_value_counts(
+            counts, col=self._s.name, min_n=min_n, round=round, backend="pandas")
 
     # -- guards against value leakage / ambiguous coercion --
     def __bool__(self):

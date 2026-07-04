@@ -52,6 +52,30 @@ except ImportError:  # pragma: no cover
 _NOISE_SALT = os.environ.get("SAFEPY_NOISE_SALT", "safepy-default-INSECURE-salt")
 
 
+def _fingerprint_groups(counts, k) -> dict:
+    """Disclosure-safe fingerprint of a grouped release (audit layer, spec
+    2026-07-04): sha256 of the sorted group keys (16 hex — no clear-text keys)
+    plus a histogram of group sizes bucketed relative to min_n=k (no raw
+    counts). Safe to persist server-side even for sensitive sources."""
+    import hashlib
+    if hasattr(counts, "columns"):        # DataFrame (crosstab / pivot counts)
+        keys = [str(i) for i in counts.index] + [str(c) for c in counts.columns]
+        vals = counts.to_numpy().ravel()
+    else:                                  # Series
+        keys = [str(i) for i in counts.index]
+        vals = counts.to_numpy()
+    sig = hashlib.sha256("\x1f".join(sorted(keys)).encode("utf-8")).hexdigest()[:16]
+    v = np.asarray(vals, dtype=float)
+    v = v[~np.isnan(v)]
+    hist = {
+        "lt_min_n": int((v < k).sum()),
+        "min_n_2k": int(((v >= k) & (v < 2 * k)).sum()),
+        "2k_10k": int(((v >= 2 * k) & (v < 10 * k)).sum()),
+        "gte_10k": int((v >= 10 * k).sum()),
+    }
+    return {"groups_sig": sig, "count_hist": hist}
+
+
 def _cell_noise(key, step: int) -> int:
     """Deterministic integer noise in ``[-step, step]`` for a cell identified by
     ``key`` (a label or (row, col) tuple)."""
@@ -205,7 +229,8 @@ class SafeVerbs(StatsMixin):
             "kind": "table", "verb": "group_agg", "agg": agg, "by": by,
             "value": value, "min_n": k, "groups": int(len(counts)),
             "count_noise": self._policy.suppression.count_noise,
-            "cells_suppressed": int((counts < k).sum()), "backend": backend})
+            "cells_suppressed": int((counts < k).sum()), "backend": backend,
+            **_fingerprint_groups(counts, k)})
 
     def _apply_count_noise(self, safe, table, counts, agg):
         """Tiltak 3 for a grouped release: noise the counts, and keep sums/means
@@ -280,7 +305,8 @@ class SafeVerbs(StatsMixin):
         return Released(series_payload(safe, name=f"count({col})"), audit={
             "kind": "table", "verb": "value_counts", "col": col, "min_n": k,
             "count_noise": self._policy.suppression.count_noise,
-            "cells_suppressed": int((counts < k).sum()), "backend": backend})
+            "cells_suppressed": int((counts < k).sum()), "backend": backend,
+            **_fingerprint_groups(counts, k)})
 
     def crosstab(self, df: pd.DataFrame, row: str, col: str,
                  *, min_n=None, round=None) -> Released:
@@ -305,7 +331,7 @@ class SafeVerbs(StatsMixin):
         return Released(frame_payload(safe), audit={
             "kind": "table", "verb": "crosstab", "row": row, "col": col,
             "min_n": k, "count_noise": self._policy.suppression.count_noise,
-            "backend": backend})
+            "backend": backend, **_fingerprint_groups(tab, k)})
 
     def pivot_table(self, df: pd.DataFrame, *, values: str, index, columns=None,
                     aggfunc: str = "mean", min_n=None, round=None) -> Released:
@@ -365,4 +391,5 @@ class SafeVerbs(StatsMixin):
             "kind": "table", "verb": "pivot_table", "aggfunc": aggfunc,
             "index": index, "columns": columns, "values": values, "min_n": k,
             "count_noise": self._policy.suppression.count_noise,
-            "cells_suppressed": int((counts < k).sum().sum()), "backend": backend})
+            "cells_suppressed": int((counts < k).sum().sum()), "backend": backend,
+            **_fingerprint_groups(counts, k)})
