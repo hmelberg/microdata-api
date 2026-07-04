@@ -114,13 +114,18 @@ def pop_audit_info(out):
 def build_log_row(alias, request_id, source_ids, level, dialect, script,
                   status, error, releases, latency_ms) -> dict:
     """Pure construction of one audit_log row (the 12 columns of that table).
-    Truncates script_head to 2000 chars and error to 1000 so a runaway script
-    or traceback can't blow up storage; classifies the principal kind."""
+    Truncates script_head to 20000 chars and error to 1000 so a runaway script
+    or traceback can't blow up storage; classifies the principal kind.
+
+    script_head was capped at 2000 chars by the original audit-layer spec
+    (2026-07-04-query-audit-layer-design.md); the owner's audit-browsing
+    feature (2026-07-04) needs admins to read whole scripts in the CSV
+    export, so it's bumped to 20000 here."""
     return {
         "ts": datetime.now(timezone.utc), "request_id": request_id,
         "principal": alias or "", "principal_kind": classify_principal(alias or ""),
         "source_ids": list(source_ids or []), "level": level, "dialect": dialect,
-        "script_head": (script or "")[:2000], "status": status,
+        "script_head": (script or "")[:20000], "status": status,
         "error": (str(error)[:1000] if error else None),
         "releases": list(releases or []), "latency_ms": latency_ms,
     }

@@ -165,9 +165,11 @@ def test_build_log_row_has_exactly_the_12_audit_log_columns():
 
 
 def test_build_log_row_truncates_script_and_error():
-    row = qa.build_log_row(None, "req-2", [], None, "m2py", "x" * 3000,
+    # script_head cap bumped 2000 -> 20000 (2026-07-04, owner's audit-browsing
+    # feature) so admins can read whole scripts in the audit_export CSV.
+    row = qa.build_log_row(None, "req-2", [], None, "m2py", "x" * 30000,
                            "error", "e" * 2000, [], 0)
-    assert len(row["script_head"]) == 2000
+    assert len(row["script_head"]) == 20000
     assert len(row["error"]) == 1000
     assert row["principal"] == ""
     assert row["principal_kind"] == "api_key"
