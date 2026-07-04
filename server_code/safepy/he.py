@@ -426,11 +426,103 @@ class EncryptedSource:
         self.private_key = private_key
 
 
+# The group aggregations HE can compute (median/quantile/min/max are absent —
+# additive encryption cannot order values). Mirrors SafeSeriesGroupBy's menu.
+_HE_GROUP_AGGS = frozenset({"mean", "sum", "count", "size", "var", "std"})
+
+
+class HESeriesGroupBy:
+    """``df.groupby(by)[value]`` over an encrypted dataset — only aggregations,
+    each a suppressed table. Same shape as :class:`safepy.safeframe.SafeSeriesGroupBy`
+    but restricted to the homomorphically computable stats."""
+
+    def __init__(self, ds, by, value, auth):
+        self._ds, self._by, self._value, self._auth = ds, by, value, auth
+
+    def mean(self, **kw): return self._agg("mean", **kw)
+    def sum(self, **kw): return self._agg("sum", **kw)
+    def count(self, **kw): return self._agg("count", **kw)
+    def size(self, **kw): return self._agg("size", **kw)
+    def var(self, **kw): return self._agg("var", **kw)
+    def std(self, **kw): return self._agg("std", **kw)
+
+    def __getattr__(self, name):
+        # median/min/max/quantile and any other stat: refuse with the reason,
+        # rather than a bare AttributeError.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        raise DisclosureError(
+            f"'{name}' is not available on encrypted data; choose one of "
+            f"{sorted(_HE_GROUP_AGGS)}. Order statistics (median/min/max/"
+            f"quantile) cannot be computed under additive homomorphic encryption.")
+
+    def agg(self, func, **kw):
+        """``groupby(by)[value].agg('mean')`` — a single stat name only. Multiple
+        stats (``['mean', 'std']``) are refused on encrypted data: unlike the
+        plaintext path there is no group_agg_multi backend, so request them one
+        at a time."""
+        if isinstance(func, (list, tuple)):
+            raise DisclosureError(
+                "on encrypted data, aggregate one statistic at a time "
+                "(e.g. .agg('mean')), not a list like ['mean', 'std']")
+        if not isinstance(func, str):
+            raise DisclosureError("agg takes a stat name like 'mean', not a function")
+        return self._agg(func, **kw)
+
+    aggregate = agg
+
+    def _agg(self, agg, **kw):
+        return self._auth.group_agg(self._ds, self._by, self._value, agg, **kw)
+
+
+class HEGroupBy:
+    """``df.groupby(by)`` over an encrypted dataset. Index a column for the
+    pandas chaining shape ``groupby(by)[value].mean()``; the explicit-value
+    shape ``groupby(by).mean(value)`` is also accepted (parity with
+    :class:`safepy.safeframe.SafeGroupBy`)."""
+
+    def __init__(self, ds, by, auth):
+        self._ds, self._by, self._auth = ds, by, auth
+
+    def _cols(self):
+        return set(self._ds["group_columns"]) | set(self._ds["value_columns"])
+
+    def __getitem__(self, value):
+        if not isinstance(value, str):
+            raise DisclosureError("select a single column by name, e.g. groupby(...)['salary']")
+        if value not in self._cols():
+            raise DisclosureError(f"{value!r} is not a column")
+        return HESeriesGroupBy(self._ds, self._by, value, self._auth)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in self._cols():
+            return HESeriesGroupBy(self._ds, self._by, name, self._auth)
+        raise DisclosureError(f"{name!r} is not a column")
+
+    # explicit-value shape: groupby(by).mean('salary')
+    def mean(self, value, **kw): return self._auth.group_agg(self._ds, self._by, value, "mean", **kw)
+    def sum(self, value, **kw): return self._auth.group_agg(self._ds, self._by, value, "sum", **kw)
+    def count(self, value, **kw): return self._auth.group_agg(self._ds, self._by, value, "count", **kw)
+    def var(self, value, **kw): return self._auth.group_agg(self._ds, self._by, value, "var", **kw)
+    def std(self, value, **kw): return self._auth.group_agg(self._ds, self._by, value, "std", **kw)
+
+    def size(self, **kw):
+        col = self._by if isinstance(self._by, str) else self._by[0]
+        return self._auth.group_agg(self._ds, self._by, col, "size", **kw)
+
+
 class HEFrame:
     """Capability facade over an encrypted dataset — the only object HE scripts
-    can reach. Every method routes through the policy-bound :class:`HEAuthority`
-    and returns a trusted ``Released``; the gate blocks ``_``-private attributes,
-    so the raw ciphertext and the key are unreachable from user code."""
+    can reach. It offers the *same idiomatic surface* as the plaintext
+    :class:`safepy.safeframe.SafeFrame` (``groupby``/``value_counts``/
+    ``crosstab``/``ols``), just a smaller menu: no median, no filters or derived
+    columns on encrypted values. So a user writes ordinary pandas and only meets
+    a clear refusal when an operation is not homomorphically computable — they do
+    not learn a new vocabulary. Every method routes through the policy-bound
+    :class:`HEAuthority`; the gate blocks ``_``-private attributes, so the raw
+    ciphertext and key are unreachable from user code."""
 
     _is_heframe = True
 
@@ -438,8 +530,10 @@ class HEFrame:
         self._ds = source.dataset
         self._auth = authority
 
-    def group_agg(self, by, value: str, agg: str = "mean", *, min_n=None, round=None) -> Released:
-        return self._auth.group_agg(self._ds, by, value, agg, min_n=min_n, round=round)
+    def groupby(self, by) -> HEGroupBy:
+        """``df.groupby('region')`` / ``df.groupby(['region', 'sex'])`` — the
+        idiomatic entry point; chain a column and a stat."""
+        return HEGroupBy(self._ds, by, self._auth)
 
     def value_counts(self, col: str, *, min_n=None, round=None) -> Released:
         return self._auth.value_counts(self._ds, col, min_n=min_n, round=round)
@@ -449,6 +543,11 @@ class HEFrame:
 
     def ols(self, *, y: str, x, min_n=None) -> Released:
         return self._auth.ols(self._ds, y=y, x=x, min_n=min_n)
+
+    def group_agg(self, by, value: str, agg: str = "mean", *, min_n=None, round=None) -> Released:
+        """Explicit verb form, kept as an alias of the idiomatic
+        ``groupby(by)[value].agg(agg)`` (and of safepy's internal verb name)."""
+        return self._auth.group_agg(self._ds, by, value, agg, min_n=min_n, round=round)
 
 
 def build_he_namespace(sources: dict, policy: Policy) -> dict:
