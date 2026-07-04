@@ -21,7 +21,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ._payload import frame_payload
 from .errors import DisclosureError
 from .result import Released
 from .safeframe import SafeColumn
@@ -139,22 +138,21 @@ class SafePd:
         return SafeColumn(pd.qcut(x._s, q, labels=labels), x._verbs)
 
     def crosstab(self, row, col, *, min_n=None, round=None) -> Released:
+        # Delegate to the same fingerprinted release helper the SafeFrame
+        # facade / SafeColumn.value_counts use (SafeVerbs._release_crosstab),
+        # so this module-level `pd.crosstab(...)` call shares one audited
+        # suppression pipeline instead of inlining a third copy of the
+        # sparse-stop/suppress/noise logic (which previously returned an
+        # audit with no groups_sig/count_hist/row/col/count_noise; see
+        # test_audit_fingerprint.py).
         if not (isinstance(row, SafeColumn) and isinstance(col, SafeColumn)):
             raise DisclosureError("pd.crosstab needs two columns")
         if protect is None:
             raise DisclosureError("the 'protect' package is required")
         verbs = row._verbs
-        k = verbs._min_n(min_n)
         tab = pd.crosstab(row._s, col._s)
-        from .safe import _stop_if_too_sparse, _noise_count_table
-        _stop_if_too_sparse(tab.to_numpy(), verbs._policy)
-        noising = bool(verbs._policy.suppression.count_noise)
-        safe = protect.suppress(tab, counts=tab, min_n=k,
-                                round=None if noising else verbs._round(round))
-        if noising:
-            safe = _noise_count_table(safe, verbs._policy)
-        return Released(frame_payload(safe), audit={
-            "kind": "table", "verb": "crosstab", "min_n": k, "backend": "pandas"})
+        return verbs._release_crosstab(tab, row=row._s.name, col=col._s.name,
+                                       min_n=min_n, round=round, backend="pandas")
 
     def __getattr__(self, name):
         if name.startswith("_"):

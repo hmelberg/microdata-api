@@ -279,7 +279,8 @@ class SafeVerbs(StatsMixin):
         return Released(frame_payload(safe), audit={
             "kind": "table", "verb": "group_agg_multi", "by": by, "value": value,
             "stats": stats, "min_n": k, "groups": int(len(counts)),
-            "rows_suppressed": int((counts < k).sum()), "backend": "pandas"})
+            "rows_suppressed": int((counts < k).sum()), "backend": "pandas",
+            **_fingerprint_groups(counts, k)})
 
     def value_counts(self, df: pd.DataFrame, col: str, *, min_n=None, round=None) -> Released:
         """Suppressed frequency table of one column."""
