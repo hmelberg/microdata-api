@@ -27,8 +27,8 @@ try:
 except Exception:
     pass  # non-Anvil test run; prod MUST configure the safepy_noise_salt secret
 
-SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb", "he", "r-he", "polars-he",
-                   "duckdb-he"}
+SAFEPY_DIALECTS = {"python", "pandas", "polars", "r", "duckdb", "he", "r-he",
+                   "polars-he", "duckdb-he"}
 
 # Dialects that need optional third-party engine(s) on the server (str or tuple).
 _DIALECT_DEPS = {"polars": "polars", "duckdb": "duckdb", "he": "phe",
@@ -51,6 +51,13 @@ def run_extended(script, sources_req, dialect="pandas"):
     most restrictive source level selects the safepy policy tier.
     """
     from source_registry import resolve_source, load_dataframe, load_encrypted_source
+
+    # "python" is a meta-dialect: the library (pandas/polars) is chosen by the
+    # script itself (a polars import). Resolve to the concrete base dialect before
+    # the encryption routing below, so it composes with _HE_VARIANT.
+    if dialect == "python":
+        import safepy
+        dialect = safepy.detect_python_dialect(script)      # "pandas" | "polars"
 
     frames, level, n_he = {}, "public", 0
     for s in sources_req or []:

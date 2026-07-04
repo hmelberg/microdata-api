@@ -16,6 +16,7 @@ Pipeline:  policy -> gate -> sandbox -> mediate.  Each stage can only ever
 
 from __future__ import annotations
 
+import ast
 from typing import Any
 
 import numpy as np
@@ -57,15 +58,45 @@ def _build_namespace(profile: Profile, policy: Policy, sources: dict[str, Any],
         return build_he_polars_namespace(sources, policy)
     verbs = SafeVerbs(policy)
     if profile is Profile.STRICT and dialect == "polars":
+        import polars as pl
         from .polars_api import SafePolarsFrame
+        # sources may arrive as pandas (the server's load_dataframe always returns
+        # pandas) — convert to polars so the polars surface works regardless of
+        # how the frame was materialized. Already-polars frames pass through.
+        def _to_pl(df):
+            return pl.from_pandas(df) if isinstance(df, pd.DataFrame) else df
         return {"safe": verbs,
-                **{name: SafePolarsFrame(df, verbs) for name, df in sources.items()}}
+                **{name: SafePolarsFrame(_to_pl(df), verbs) for name, df in sources.items()}}
     if profile is Profile.STRICT:
         from .namespaces import SafeNp, SafePd
         from .formula_api import SafeStats
         return {"safe": verbs, "pd": SafePd(), "np": SafeNp(), "smf": SafeStats(verbs),
                 **{name: SafeFrame(df, verbs) for name, df in sources.items()}}
     return {"pd": pd, "np": np, "safe": verbs, **sources}
+
+
+def detect_python_dialect(code: str) -> str:
+    """Which Python dataframe library the script uses: ``"polars"`` if it imports
+    polars, else ``"pandas"``. AST-based (an ``import polars`` inside a string or
+    comment does not count), and fail-safe — a script that is not valid Python
+    resolves to ``"pandas"`` and the gate reports the real syntax error later."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return "pandas"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name.split(".")[0] == "polars" for a in node.names):
+                return "polars"
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] == "polars":
+                return "polars"
+    return "pandas"
+
+
+def _sources_are_encrypted(sources: dict) -> bool:
+    from .he import EncryptedSource
+    return any(isinstance(v, EncryptedSource) for v in sources.values())
 
 
 def run(code: str,
@@ -88,6 +119,16 @@ def run(code: str,
     policy: Policy = resolve_policy([level], suppression=suppression)
     active = Profile(profile) if profile is not None else policy.profile
     catalog = None  # datasets left in the session (populated once execution runs)
+
+    if dialect == "python":
+        # meta-dialect: the library is chosen by the code itself (a polars import),
+        # and encrypted sources route to the homomorphic variant. See the design
+        # spec 2026-07-04-python-meta-dialect-design.md.
+        base = detect_python_dialect(code)                  # "pandas" | "polars"
+        if _sources_are_encrypted(sources):
+            dialect = "he" if base == "pandas" else "polars-he"
+        else:
+            dialect = base
 
     if dialect == "r":
         # R is parsed & translated (never executed) to the shared release core,

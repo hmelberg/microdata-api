@@ -16,8 +16,8 @@ Public surface:
     run(code, sources, level) -> SafeResult
 """
 
-from .api import run
+from .api import detect_python_dialect, run
 from .policy import ProtectionLevel
 from .result import SafeResult
 
-__all__ = ["run", "ProtectionLevel", "SafeResult"]
+__all__ = ["run", "detect_python_dialect", "ProtectionLevel", "SafeResult"]

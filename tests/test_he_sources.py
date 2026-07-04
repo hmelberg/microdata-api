@@ -158,6 +158,27 @@ def test_shim_duckdb_dialect_autoroutes_encrypted(he_source, monkeypatch):
     assert out["audit"]["backend"] == "paillier"
 
 
+def test_shim_python_metadialect_pandas_encrypted(he_source, monkeypatch):
+    # "python" mode + pandas script + encrypted source -> he
+    _, src = he_source
+    _patch_registry(monkeypatch, src)
+    out = safepy_shim.run_extended(
+        "df.groupby('region')['salary'].sum()",
+        [{"alias": "df", "source_id": "he_test"}], dialect="python")
+    assert out["err"] is None and out["audit"]["backend"] == "paillier"
+
+
+def test_shim_python_metadialect_polars_encrypted(he_source, monkeypatch):
+    # "python" mode + polars import + encrypted source -> polars-he
+    pytest.importorskip("polars")
+    _, src = he_source
+    _patch_registry(monkeypatch, src)
+    out = safepy_shim.run_extended(
+        "import polars as pl\ndf.group_by('region').agg(pl.col('salary').sum())",
+        [{"alias": "df", "source_id": "he_test"}], dialect="python")
+    assert out["err"] is None and out["audit"]["backend"] == "paillier"
+
+
 def test_shim_encrypted_dialect_needs_encrypted_source(monkeypatch):
     plain = {"source_id": "p", "kind": "url", "location": "https://x/y.csv",
              "format": "csv", "level": "public", "status": "active"}
