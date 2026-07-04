@@ -4,7 +4,4 @@
 # pip install anvil-uplink
 # python -m anvil.run_app_via_uplink YourAppPackageName
 
-try:
-    __path__ = [__path__[0] + "/server_code", __path__[0] + "/client_code"]
-except (NameError, IndexError):
-    pass
+__path__ = [__path__[0] + "/server_code", __path__[0] + "/client_code"]
