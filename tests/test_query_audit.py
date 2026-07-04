@@ -58,3 +58,44 @@ def test_collect_fingerprints_pulls_leaf_audits_only():
     fps = qa.collect_fingerprints(d)
     assert len(fps) == 1 and fps[0]["groups_sig"] == "ab" * 8
     assert "top" not in str(fps)
+
+
+# resolve_run_levels: exercised against source_registry's real fixtures
+# (resolve_source falls back to them when anvil.tables isn't importable, so
+# this stays a pure, anvil-free test). demo_public_csv is public;
+# hospital_public_csv is protected despite the name.
+
+def test_resolve_run_levels_strictest_wins():
+    ids, level = qa.resolve_run_levels([
+        {"alias": "a", "source_id": "demo_public_csv"},
+        {"alias": "b", "source_id": "hospital_public_csv"},
+    ])
+    assert ids == ["demo_public_csv", "hospital_public_csv"]
+    assert level == "protected"
+
+
+def test_resolve_run_levels_all_public():
+    ids, level = qa.resolve_run_levels([
+        {"alias": "a", "source_id": "demo_public_csv"},
+    ])
+    assert ids == ["demo_public_csv"]
+    assert level == "public"
+
+
+def test_resolve_run_levels_unknown_source_is_conservative():
+    ids, level = qa.resolve_run_levels([
+        {"alias": "a", "source_id": "demo_public_csv"},
+        {"alias": "b", "source_id": "does-not-exist"},
+    ])
+    assert ids == ["demo_public_csv", "does-not-exist"]
+    assert level == "protected"
+
+
+def test_resolve_run_levels_empty_request():
+    assert qa.resolve_run_levels([]) == ([], None)
+    assert qa.resolve_run_levels(None) == ([], None)
+
+
+def test_resolve_run_levels_skips_blank_source_id():
+    ids, level = qa.resolve_run_levels([{"alias": "a", "source_id": "  "}])
+    assert ids == [] and level is None

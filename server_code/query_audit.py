@@ -55,3 +55,57 @@ def collect_fingerprints(result_dict):
         if "groups_sig" in a:
             out.append({k: a[k] for k in _FP_KEYS if k in a})
     return out
+
+
+_LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
+
+
+def resolve_run_levels(sources_req):
+    """(source_ids, strictest_level) for a /run_extended request. Reuses the
+    registry resolution the shims use (source_registry.resolve_source);
+    unresolvable sources are treated conservatively here (level='protected')
+    for budget purposes — the shim will fail them properly during the run."""
+    import source_registry
+    ids, worst = [], "public"
+    for s in (sources_req or []):
+        sid = (s.get("source_id") or "").strip() if isinstance(s, dict) else ""
+        if not sid:
+            continue
+        ids.append(sid)
+        try:
+            src = source_registry.resolve_source(sid)
+            lvl = src.get("level") or "public"
+        except Exception:
+            lvl = "protected"        # unknown/unresolvable -> conservative
+        if _LEVEL_ORDER.get(lvl, 1) > _LEVEL_ORDER.get(worst, 0):
+            worst = lvl
+    return ids, (worst if ids else None)
+
+
+def count_recent_anvil(alias, source_id, since):
+    """count_recent for check_budget: successful runs by `alias` against
+    `source_id` since `since`. Anvil-only (lazy import)."""
+    from anvil.tables import app_tables
+    import anvil.tables.query as q
+    n = 0
+    for row in app_tables.audit_log.search(principal=alias, status="ok",
+                                           ts=q.greater_than(since)):
+        if source_id in (row["source_ids"] or []):
+            n += 1
+    return n
+
+
+def log_run(alias, request_id, source_ids, level, dialect, script,
+            status, error, releases, latency_ms):
+    """One audit row per run. Never raises (logging must not break runs)."""
+    try:
+        from anvil.tables import app_tables
+        app_tables.audit_log.add_row(
+            ts=datetime.now(timezone.utc), request_id=request_id,
+            principal=alias or "", principal_kind=classify_principal(alias or ""),
+            source_ids=list(source_ids or []), level=level, dialect=dialect,
+            script_head=(script or "")[:2000], status=status,
+            error=(str(error)[:1000] if error else None),
+            releases=list(releases or []), latency_ms=latency_ms)
+    except Exception as exc:            # noqa: BLE001
+        print(f"query_audit.log_run failed: {exc}")

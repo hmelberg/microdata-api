@@ -26,7 +26,55 @@ db_schema:
     title: api_usage
   audit_log:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: ts
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: request_id
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: principal
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: principal_kind
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: source_ids
+      type: simpleObject
+    - admin_ui: {}
+      client_hidden: null
+      name: level
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: dialect
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: script_head
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: status
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: error
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: releases
+      type: simpleObject
+    - admin_ui: {}
+      client_hidden: null
+      name: latency_ms
+      type: number
     indexes: []
     server: full
     title: audit_log

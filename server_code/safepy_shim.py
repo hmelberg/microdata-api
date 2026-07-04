@@ -71,7 +71,12 @@ def run_extended(script, sources_req, dialect="pandas"):
     # capability facade is safe-by-construction for user-supplied code.
     res = safepy.run(script, frames, level=level, profile="strict",
                      dialect=dialect, render="plotly")
-    return _to_client_shape(script, res.as_dict())
+    d = res.as_dict()
+    out = _to_client_shape(script, d)
+    import query_audit
+    out["_audit_releases"] = query_audit.collect_fingerprints(d)
+    out["_audit_level"] = level
+    return out
 
 
 # ---------------------------------------------------------------------------

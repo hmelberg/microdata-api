@@ -130,5 +130,8 @@ def run_extended(script: str, sources_req, backend: str = "pandas",
         datasets[s["alias"]] = load_dataframe(src)
         levels.append(src.get("level", "public"))
     policy = resolve_policy(levels)
-    return m2py_remote.run_remote(
+    out = m2py_remote.run_remote(
         script, datasets=datasets, backend=backend, policy=policy, raw=raw)
+    out["_audit_releases"] = []
+    out["_audit_level"] = (policy or {}).get("level")
+    return out

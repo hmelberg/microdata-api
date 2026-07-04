@@ -551,11 +551,39 @@ def http_run():
 
 
 @anvil.server.background_task
-def bg_run_extended(script, sources_req, backend, raw, dialect="m2py"):
+def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
+                    audit_alias=None, audit_request_id=None, audit_source_ids=None):
+    import time
     import safepy_shim
-    if dialect in safepy_shim.SAFEPY_DIALECTS:
-        return safepy_shim.run_extended(script, sources_req, dialect=dialect)
-    return m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
+    import query_audit
+    t0 = time.time()
+    status, err_msg = "ok", None
+    out = None
+    try:
+        if dialect in safepy_shim.SAFEPY_DIALECTS:
+            out = safepy_shim.run_extended(script, sources_req, dialect=dialect)
+        else:
+            out = m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
+        if isinstance(out, dict) and out.get("err"):
+            status, err_msg = "error", out.get("err")
+        return out
+    except Exception as exc:
+        status, err_msg = "error", str(exc)
+        raise
+    finally:
+        # `out` is a dict mutated in place: `return out` above already bound
+        # the return value to this same object, so popping the `_audit_*`
+        # keys here still strips them before the caller ever sees them.
+        # `out` is always defined (initialized to None before try) — never
+        # use "out" in dir().
+        if isinstance(out, dict):
+            releases = out.pop("_audit_releases", [])
+            level = out.pop("_audit_level", None)
+        else:
+            releases, level = [], None
+        query_audit.log_run(audit_alias, audit_request_id, audit_source_ids, level,
+                            dialect, script, status, err_msg, releases,
+                            int((time.time() - t0) * 1000))
 
 
 @anvil.server.http_endpoint("/run_extended", methods=["POST"],
@@ -580,8 +608,25 @@ def http_run_extended():
     dialect = (body.get("dialect") or "m2py").lower()
     if dialect != "m2py" and dialect not in safepy_shim.SAFEPY_DIALECTS:
         return _json({"error": f"unknown dialect: {dialect}"}, status=400)
+
+    # Audit layer v1: quota gate before compute (spec 2026-07-04).
+    import uuid
+    import query_audit
+    alias = auth.principal_alias(principal)
+    request_id = str(uuid.uuid4())
+    source_ids, level = query_audit.resolve_run_levels(sources_req)
+    allowed, msg = query_audit.check_budget(alias, level, source_ids,
+                                            query_audit.count_recent_anvil)
+    if not allowed:
+        query_audit.log_run(alias, request_id, source_ids, level, dialect,
+                            script, "refused_budget", msg, [], 0)
+        resp = _json({"error": msg}, status=429)
+        resp.headers["Retry-After"] = "3600"
+        return resp
+
     task = anvil.server.launch_background_task(
-        "bg_run_extended", script, sources_req, backend, raw, dialect)
+        "bg_run_extended", script, sources_req, backend, raw, dialect,
+        alias, request_id, source_ids)
     return _json({"task_id": task.get_id(), "mode": "async"})
 
 
