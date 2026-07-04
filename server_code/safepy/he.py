@@ -75,6 +75,37 @@ def _load_public(ds: dict):
     return phe.paillier.PaillierPublicKey(int(ds["public_key"]["n"], 16))
 
 
+# --- scheme-pure Paillier primitives (browser-interoperable) -----------------
+# The wire ciphertext is the RAW Paillier integer c = (n+1)^m · r^n mod n²,
+# hex-encoded — NOT phe's EncodedNumber wrapper, which the browser lib
+# (paillier-bigint) has no notion of. paillier-bigint must encrypt with g = n+1
+# (its default g is random and would NOT decrypt here). Plaintexts are the
+# fixed-point encoded ints reduced mod n; decryption maps the upper half of
+# [0, n) back to negatives. Homomorphic addition is ciphertext multiplication
+# mod n², which phe's EncryptedNumber(+) performs at exponent 0.
+
+def _enc_hex(pub, m: int) -> str:
+    """Raw-encrypt one integer (reduced mod n) -> hex ciphertext."""
+    return _hex(pub.raw_encrypt(int(m) % pub.n))
+
+
+def _ct(pub, hexct: str):
+    """Rebuild a phe EncryptedNumber (exponent 0) from a raw hex ciphertext."""
+    return phe.paillier.EncryptedNumber(pub, int(hexct, 16), 0)
+
+
+def _ct_hex(en) -> str:
+    """Deterministic raw hex of an EncryptedNumber (no re-obfuscation)."""
+    return _hex(en.ciphertext(be_secure=False))
+
+
+def _decrypt_int(priv, en) -> int:
+    """Raw-decrypt an EncryptedNumber and map the upper half back to negatives."""
+    n = priv.public_key.n
+    m = priv.raw_decrypt(en.ciphertext(be_secure=False))
+    return m - n if m > n // 2 else m
+
+
 def encrypt_dataframe(df: pd.DataFrame, *, value_cols, group_cols,
                       scale: int = DEFAULT_SCALE, key_bits: int = 2048,
                       winsorize=None):
@@ -108,9 +139,9 @@ def encrypt_dataframe(df: pd.DataFrame, *, value_cols, group_cols,
         ints = [_encode(v, scale) if m else 0 for v, m in zip(vals.fillna(0.0), mask)]
         ds["value_columns"][c] = {
             "scale": int(scale),
-            "ct": [_hex(pub.encrypt(i).ciphertext()) for i in ints],
-            "ct_sq": [_hex(pub.encrypt(i * i).ciphertext()) for i in ints],
-            "mask": [_hex(pub.encrypt(int(m)).ciphertext()) for m in mask],
+            "ct": [_enc_hex(pub, i) for i in ints],
+            "ct_sq": [_enc_hex(pub, i * i) for i in ints],
+            "mask": [_enc_hex(pub, int(m)) for m in mask],
             "winsorize": None if winsorize is None else [float(winsorize[0]), float(winsorize[1])],
         }
     return ds, priv
@@ -168,9 +199,9 @@ def blind_group_agg(ds: dict, by, value: str) -> dict:
             f"'{value}' is not an encrypted value column of this dataset; "
             f"choose one of {sorted(ds['value_columns'])}")
     col = ds["value_columns"][value]
-    ct = [phe.paillier.EncryptedNumber(pub, int(h, 16)) for h in col["ct"]]
-    ct_sq = [phe.paillier.EncryptedNumber(pub, int(h, 16)) for h in col["ct_sq"]]
-    mask = [phe.paillier.EncryptedNumber(pub, int(h, 16)) for h in col["mask"]]
+    ct = [_ct(pub, h) for h in col["ct"]]
+    ct_sq = [_ct(pub, h) for h in col["ct_sq"]]
+    mask = [_ct(pub, h) for h in col["mask"]]
     by, rows = _group_rows(ds, by)
     groups = {}
     for key, idx in rows.items():
@@ -179,9 +210,9 @@ def blind_group_agg(ds: dict, by, value: str) -> dict:
             acc, acc_sq, acc_m = acc + ct[i], acc_sq + ct_sq[i], acc_m + mask[i]
         groups[str(key)] = {"key": key if isinstance(key, str) else list(key),
                             "n": len(idx),
-                            "sum": _hex(acc.ciphertext()),
-                            "sum_sq": _hex(acc_sq.ciphertext()),
-                            "count": _hex(acc_m.ciphertext())}
+                            "sum": _ct_hex(acc),
+                            "sum_sq": _ct_hex(acc_sq),
+                            "count": _ct_hex(acc_m)}
     return {"by": by, "value": value, "scale": col["scale"], "groups": groups}
 
 
@@ -213,7 +244,7 @@ class HEAuthority:
                 f"encryption time with the same limits (it carries: {have}).")
 
     def _dec(self, pub, hexct: str) -> int:
-        return self._priv.decrypt(phe.paillier.EncryptedNumber(pub, int(hexct, 16)))
+        return _decrypt_int(self._priv, _ct(pub, hexct))
 
     def group_agg(self, ds: dict, by, value: str, agg: str = "mean",
                   *, min_n=None, round=None) -> Released:
@@ -264,6 +295,101 @@ class HEAuthority:
         return self._verbs._release_group_agg(
             table, counts, agg=agg, by=by, value=value,
             min_n=min_n, round=round, backend="paillier")
+
+    def ols(self, ds: dict, *, y: str, x, min_n=None) -> Released:
+        """Tier-1 regression (spec §3 "Regression tiers"): OLS of an *encrypted*
+        outcome on *plaintext* categorical predictors.
+
+        ``X'X`` is plain arithmetic on the dummy design; each ``X'y`` entry is a
+        sum of outcome ciphertexts over one dummy level (Paillier addition), and
+        RSS comes from the shipped Enc(y²) column, so the authority decrypts
+        only per-level aggregates. Levels below ``min_n`` are dropped from the
+        design entirely — their sums are never decrypted (the same rule as
+        ``StatsMixin._numeric_design``). Missing outcomes are refused: NaN rows
+        cannot be dropped blindly, so the column must be complete.
+        """
+        if y not in ds["value_columns"]:
+            raise DisclosureError(
+                f"'{y}' is not an encrypted value column of this dataset; "
+                f"choose one of {sorted(ds['value_columns'])}")
+        xs = [x] if isinstance(x, str) else list(x)
+        for c in xs:
+            if c not in ds["group_columns"]:
+                raise DisclosureError(
+                    f"'{c}' is not a plaintext group column of this encrypted "
+                    f"dataset; predictors must be among {sorted(ds['group_columns'])}")
+        self._check_winsorize(ds, y)
+        pub = _load_public(ds)
+        col = ds["value_columns"][y]
+        scale, n = col["scale"], int(ds["n_rows"])
+        k = self._verbs._min_n(min_n)
+
+        ct = [_ct(pub, h) for h in col["ct"]]
+        mask = [_ct(pub, h) for h in col["mask"]]
+
+        # completeness gate: one full-sample aggregate (the non-null count)
+        acc = mask[0]
+        for m in mask[1:]:
+            acc = acc + m
+        if _decrypt_int(self._priv, acc) < n:
+            raise DisclosureError(
+                f"'{y}' has missing values; OLS on encrypted data requires a "
+                f"complete outcome column (NaN rows cannot be dropped blindly). "
+                f"Re-encrypt without missing values or use group_agg.")
+
+        # plaintext design: intercept + drop-first dummies, sub-k levels dropped
+        frame = pd.DataFrame({c: ds["group_columns"][c] for c in xs})
+        X = pd.DataFrame({"Intercept": np.ones(n)})
+        support, dropped = {"Intercept": n}, []
+        for c in xs:
+            dummies = pd.get_dummies(frame[c].astype(str), prefix=c, drop_first=True)
+            for dcol in dummies.columns:
+                cnt = int(dummies[dcol].sum())
+                if cnt >= k:
+                    X[dcol] = dummies[dcol].astype(float)
+                    support[dcol] = cnt
+                else:
+                    dropped.append(str(dcol))    # never computed, never decrypted
+        p = X.shape[1]
+        if p < 2:
+            raise DisclosureError("no predictors with sufficient support to fit a model")
+        if n - p < 1:
+            raise DisclosureError("too few observations for the requested design")
+
+        # X'y: dummy columns are 0/1, so each entry is a ciphertext sum over the
+        # level's rows — the only encrypted arithmetic in the whole fit.
+        xty = np.empty(p)
+        for j, name in enumerate(X.columns):
+            rows = np.nonzero(X[name].to_numpy())[0]
+            acc = ct[rows[0]]
+            for i in rows[1:]:
+                acc = acc + ct[i]
+            xty[j] = _decrypt_int(self._priv, acc) / scale
+        ct_sq = [_ct(pub, h) for h in col["ct_sq"]]
+        acc = ct_sq[0]
+        for c2 in ct_sq[1:]:
+            acc = acc + c2
+        sum_sq = _decrypt_int(self._priv, acc) / (scale * scale)
+
+        # solve in plaintext
+        from scipy import stats as _st
+        xtx_inv = np.linalg.pinv(X.T.to_numpy(dtype=float) @ X.to_numpy(dtype=float))
+        beta = xtx_inv @ xty
+        dof = n - p
+        sigma2 = max(sum_sq - beta @ xty, 0.0) / dof
+        se = np.sqrt(np.clip(np.diag(sigma2 * xtx_inv), 0.0, None))
+        tvals = np.divide(beta, se, out=np.zeros_like(beta), where=se > 0)
+        pvals = 2 * _st.t.sf(np.abs(tvals), dof)
+        tcrit = float(_st.t.ppf(0.975, dof))
+
+        params = pd.Series(beta, index=X.columns)
+        ci = pd.DataFrame({0: beta - tcrit * se, 1: beta + tcrit * se}, index=X.columns)
+        res = self._verbs._release_coeffs(params, ci, pd.Series(pvals, index=X.columns),
+                                          support, family="ols", n=n)
+        res.audit["backend"] = "paillier"
+        res.audit["terms_suppressed"] = sorted(
+            set(res.audit.get("terms_suppressed", [])) | set(dropped))
+        return res
 
     def _plain_series(self, ds: dict, col: str) -> pd.Series:
         if col not in ds["group_columns"]:
@@ -320,6 +446,9 @@ class HEFrame:
 
     def crosstab(self, row: str, col: str, *, min_n=None, round=None) -> Released:
         return self._auth.crosstab(self._ds, row, col, min_n=min_n, round=round)
+
+    def ols(self, *, y: str, x, min_n=None) -> Released:
+        return self._auth.ols(self._ds, y=y, x=x, min_n=min_n)
 
 
 def build_he_namespace(sources: dict, policy: Policy) -> dict:
