@@ -30,7 +30,11 @@ def check_budget(alias, level, source_ids, count_recent, now=None):
     status='ok' rows (failed runs are free — otherwise users burn quota on
     syntax errors). Returns (allowed, norwegian_message_or_None)."""
     kind = classify_principal(alias)
-    limit = BUDGETS.get((level or "public", kind))
+    # Fail closed: an unrecognized (level, kind) combo — a typo, or a future
+    # level not yet wired into BUDGETS — must not fall through to "unlimited"
+    # via .get()'s None default. Fall back to the PROTECTED budget for that
+    # principal kind rather than trusting an unknown level as public.
+    limit = BUDGETS.get((level or "public", kind), BUDGETS[("protected", kind)])
     if limit is None or not source_ids:
         return True, None
     if limit == 0:
@@ -43,7 +47,11 @@ def check_budget(alias, level, source_ids, count_recent, now=None):
     return True, None
 
 
-_FP_KEYS = ("verb", "min_n", "groups", "cells_suppressed", "groups_sig", "count_hist")
+_FP_KEYS = ("verb", "min_n", "groups", "cells_suppressed", "groups_sig", "count_hist",
+           # grouping-column identity: column NAMES are schema, disclosure-free
+           # (unlike the values inside those columns), and v2 needs them to
+           # correlate fingerprints across a script's multiple releases.
+           "by", "value", "agg", "col", "row", "index", "columns", "aggfunc")
 
 
 def collect_fingerprints(result_dict):
@@ -95,17 +103,36 @@ def count_recent_anvil(alias, source_id, since):
     return n
 
 
+def pop_audit_info(out):
+    """Pop internal _audit_* keys from a run result dict (None-safe).
+    Returns (releases, level). MUST be called before the result reaches the client."""
+    if not isinstance(out, dict):
+        return [], None
+    return out.pop("_audit_releases", []), out.pop("_audit_level", None)
+
+
+def build_log_row(alias, request_id, source_ids, level, dialect, script,
+                  status, error, releases, latency_ms) -> dict:
+    """Pure construction of one audit_log row (the 12 columns of that table).
+    Truncates script_head to 2000 chars and error to 1000 so a runaway script
+    or traceback can't blow up storage; classifies the principal kind."""
+    return {
+        "ts": datetime.now(timezone.utc), "request_id": request_id,
+        "principal": alias or "", "principal_kind": classify_principal(alias or ""),
+        "source_ids": list(source_ids or []), "level": level, "dialect": dialect,
+        "script_head": (script or "")[:2000], "status": status,
+        "error": (str(error)[:1000] if error else None),
+        "releases": list(releases or []), "latency_ms": latency_ms,
+    }
+
+
 def log_run(alias, request_id, source_ids, level, dialect, script,
             status, error, releases, latency_ms):
     """One audit row per run. Never raises (logging must not break runs)."""
     try:
         from anvil.tables import app_tables
-        app_tables.audit_log.add_row(
-            ts=datetime.now(timezone.utc), request_id=request_id,
-            principal=alias or "", principal_kind=classify_principal(alias or ""),
-            source_ids=list(source_ids or []), level=level, dialect=dialect,
-            script_head=(script or "")[:2000], status=status,
-            error=(str(error)[:1000] if error else None),
-            releases=list(releases or []), latency_ms=latency_ms)
+        app_tables.audit_log.add_row(**build_log_row(
+            alias, request_id, source_ids, level, dialect, script,
+            status, error, releases, latency_ms))
     except Exception as exc:            # noqa: BLE001
         print(f"query_audit.log_run failed: {exc}")

@@ -573,14 +573,10 @@ def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
     finally:
         # `out` is a dict mutated in place: `return out` above already bound
         # the return value to this same object, so popping the `_audit_*`
-        # keys here still strips them before the caller ever sees them.
-        # `out` is always defined (initialized to None before try) — never
-        # use "out" in dir().
-        if isinstance(out, dict):
-            releases = out.pop("_audit_releases", [])
-            level = out.pop("_audit_level", None)
-        else:
-            releases, level = [], None
+        # keys here (via the pure, unit-tested query_audit.pop_audit_info)
+        # still strips them before the caller ever sees them. `out` is always
+        # defined (initialized to None before try) — never use "out" in dir().
+        releases, level = query_audit.pop_audit_info(out)
         query_audit.log_run(audit_alias, audit_request_id, audit_source_ids, level,
                             dialect, script, status, err_msg, releases,
                             int((time.time() - t0) * 1000))

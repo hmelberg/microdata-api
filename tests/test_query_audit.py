@@ -38,6 +38,17 @@ def test_sensitive_requires_user():
     assert ok
 
 
+def test_unknown_level_fails_closed_to_protected_budget():
+    # An unrecognized level string (e.g. a typo, or a future level not yet
+    # wired into BUDGETS) must not fall through to "unlimited" via .get()'s
+    # None default — it should fail closed to the PROTECTED budget for that
+    # principal kind (protected/user == 100).
+    ok, _ = qa.check_budget("user:a@b.no", "hemmelig", ["s1"], _counter(99))
+    assert ok
+    ok, msg = qa.check_budget("user:a@b.no", "hemmelig", ["s1"], _counter(100))
+    assert not ok and "s1" in msg
+
+
 def test_window_passed_to_counter():
     seen = {}
     def counter(alias, sid, since):
@@ -52,11 +63,15 @@ def test_collect_fingerprints_pulls_leaf_audits_only():
     d = {"audit": {"top": True}, "results": [
         {"payload": 1, "audit": {"verb": "group_agg", "groups_sig": "ab" * 8,
                                  "count_hist": {"lt_min_n": 0}, "min_n": 5,
-                                 "groups": 3, "cells_suppressed": 0}},
+                                 "groups": 3, "cells_suppressed": 0, "by": "region"}},
         {"payload": 2, "audit": {"verb": "ols"}},
     ]}
     fps = qa.collect_fingerprints(d)
     assert len(fps) == 1 and fps[0]["groups_sig"] == "ab" * 8
+    # grouping-column identity (v2 need): column NAMES are schema, disclosure
+    # free, and pass through when present — only the fingerprint's own
+    # disclosure-sensitive fields (raw payloads/top-level audit) are excluded.
+    assert fps[0]["by"] == "region"
     assert "top" not in str(fps)
 
 
@@ -99,3 +114,60 @@ def test_resolve_run_levels_empty_request():
 def test_resolve_run_levels_skips_blank_source_id():
     ids, level = qa.resolve_run_levels([{"alias": "a", "source_id": "  "}])
     assert ids == [] and level is None
+
+
+# pop_audit_info / build_log_row: the strip/log wiring in bg_run_extended
+# (api_endpoints.py) is untested and imports anvil (unavailable locally).
+# These pure helpers let it be refactored for testability without changing
+# behavior — pop_audit_info strips the internal _audit_* keys from a run
+# result before it reaches the client, and build_log_row is the pure
+# construction of one audit_log row that log_run's anvil call now uses.
+
+def test_pop_audit_info_removes_both_keys_and_returns_them():
+    out = {"data": [1, 2], "_audit_releases": [{"verb": "group_agg"}],
+           "_audit_level": "protected"}
+    releases, level = qa.pop_audit_info(out)
+    assert releases == [{"verb": "group_agg"}]
+    assert level == "protected"
+    assert "_audit_releases" not in out and "_audit_level" not in out
+    assert out == {"data": [1, 2]}
+
+
+def test_pop_audit_info_defaults_when_keys_absent():
+    out = {"data": [1, 2]}
+    assert qa.pop_audit_info(out) == ([], None)
+
+
+def test_pop_audit_info_none_safe():
+    assert qa.pop_audit_info(None) == ([], None)
+    assert qa.pop_audit_info("not a dict") == ([], None)
+    assert qa.pop_audit_info([1, 2, 3]) == ([], None)
+
+
+def test_build_log_row_has_exactly_the_12_audit_log_columns():
+    row = qa.build_log_row("user:a@b.no", "req-1", ["s1", "s2"], "protected",
+                           "pandas", "df.groupby('g')['x'].sum()", "ok", None,
+                           [{"verb": "group_agg"}], 42)
+    assert set(row) == {"ts", "request_id", "principal", "principal_kind",
+                        "source_ids", "level", "dialect", "script_head",
+                        "status", "error", "releases", "latency_ms"}
+    assert row["principal"] == "user:a@b.no"
+    assert row["principal_kind"] == "user"
+    assert row["source_ids"] == ["s1", "s2"]
+    assert row["level"] == "protected"
+    assert row["dialect"] == "pandas"
+    assert row["script_head"] == "df.groupby('g')['x'].sum()"
+    assert row["status"] == "ok"
+    assert row["error"] is None
+    assert row["releases"] == [{"verb": "group_agg"}]
+    assert row["latency_ms"] == 42
+    assert isinstance(row["ts"], datetime)
+
+
+def test_build_log_row_truncates_script_and_error():
+    row = qa.build_log_row(None, "req-2", [], None, "m2py", "x" * 3000,
+                           "error", "e" * 2000, [], 0)
+    assert len(row["script_head"]) == 2000
+    assert len(row["error"]) == 1000
+    assert row["principal"] == ""
+    assert row["principal_kind"] == "api_key"
