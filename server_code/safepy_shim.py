@@ -27,10 +27,15 @@ try:
 except Exception:
     pass  # non-Anvil test run; prod MUST configure the safepy_noise_salt secret
 
-SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb", "he"}
+SAFEPY_DIALECTS = {"pandas", "polars", "r", "duckdb", "he", "r-he"}
 
 # Dialects that need an optional third-party engine on the server.
-_DIALECT_DEPS = {"polars": "polars", "duckdb": "duckdb", "he": "phe"}
+_DIALECT_DEPS = {"polars": "polars", "duckdb": "duckdb", "he": "phe", "r-he": "phe"}
+
+# Encrypted (format="he") sources force the homomorphic variant of the language:
+# a user picks Python or R and just points at an encrypted source. duckdb-over-
+# encrypted is not built yet.
+_HE_VARIANT = {"pandas": "he", "he": "he", "r": "r-he", "r-he": "r-he"}
 
 _LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
 
@@ -41,18 +46,9 @@ def run_extended(script, sources_req, dialect="pandas"):
     Levels and locations come from the registry only — never the request. The
     most restrictive source level selects the safepy policy tier.
     """
-    dep = _DIALECT_DEPS.get(dialect)
-    if dep is not None:
-        try:
-            __import__(dep)
-        except ImportError:
-            return _error_shape(
-                script, f"dialect '{dialect}' er ikke tilgjengelig på serveren "
-                        f"(mangler pakken '{dep}')")
-
     from source_registry import resolve_source, load_dataframe, load_encrypted_source
 
-    frames, level = {}, "public"
+    frames, level, n_he = {}, "public", 0
     for s in sources_req or []:
         alias, sid = s.get("alias"), s.get("source_id")
         if not alias or not sid:
@@ -61,27 +57,45 @@ def run_extended(script, sources_req, dialect="pandas"):
             src = resolve_source(sid)
         except KeyError:
             return _error_shape(script, f"ukjent kilde: {sid}")
-        # HE sources (format="he", Plane B) never decrypt to a frame: the 'he'
-        # dialect carries them as EncryptedSource, and only that dialect may.
-        if dialect == "he":
-            if (src.get("format") or "") != "he":
+        # HE sources (format="he", Plane B) never decrypt to a frame; they are
+        # carried as EncryptedSource and force the language's homomorphic variant.
+        if (src.get("format") or "") == "he":
+            if dialect not in _HE_VARIANT:
                 return _error_shape(
-                    script, f"kilden '{sid}' er ikke en kryptert (he) kilde")
+                    script, f"dialekten '{dialect}' kan ikke analysere krypterte "
+                            f"kilder ennå (bruk Python eller R)")
             frames[alias] = load_encrypted_source(src)
-        elif (src.get("format") or "") == "he":
-            return _error_shape(
-                script, f"kilden '{sid}' er kryptert — bruk dialekten 'he'")
+            n_he += 1
         else:
+            if dialect in ("he", "r-he"):
+                return _error_shape(
+                    script, f"kilden '{sid}' er ikke kryptert — bruk en vanlig dialekt")
             frames[alias] = load_dataframe(src)
         if _LEVEL_ORDER.get(src["level"], 1) > _LEVEL_ORDER[level]:
             level = src["level"]
+
+    if n_he and n_he != len(frames):
+        return _error_shape(
+            script, "kan ikke blande krypterte og ukrypterte kilder i én kjøring")
+
+    # encrypted sources switch the run to the homomorphic variant of the language
+    effective = _HE_VARIANT.get(dialect, dialect) if n_he else dialect
+
+    dep = _DIALECT_DEPS.get(effective)
+    if dep is not None:
+        try:
+            __import__(dep)
+        except ImportError:
+            return _error_shape(
+                script, f"dialect '{effective}' er ikke tilgjengelig på serveren "
+                        f"(mangler pakken '{dep}')")
 
     import safepy
     # profile="strict" is mandatory: safepy's own policy would give the
     # protected level the OPEN sandbox (safepy/policy.py), and only the STRICT
     # capability facade is safe-by-construction for user-supplied code.
     res = safepy.run(script, frames, level=level, profile="strict",
-                     dialect=dialect, render="plotly")
+                     dialect=effective, render="plotly")
     d = res.as_dict()
     out = _to_client_shape(script, d)
     import query_audit

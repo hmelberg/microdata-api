@@ -111,18 +111,35 @@ def test_shim_he_dialect_refuses_disclosive_code(he_source, monkeypatch):
     assert "30000" not in out["err"]         # no data value in the message
 
 
-def test_shim_dialect_source_mismatch(he_source, monkeypatch):
+def test_shim_pandas_dialect_autoroutes_encrypted(he_source, monkeypatch):
+    # a user in Python mode pointing at an encrypted source: the shim silently
+    # switches to the homomorphic variant (pandas -> he)
     _, src = he_source
     _patch_registry(monkeypatch, src)
     out = safepy_shim.run_extended(
-        "df.value_counts('region')",
+        "df.groupby('region')['salary'].sum()",
         [{"alias": "df", "source_id": "he_test"}], dialect="pandas")
-    assert out["err"] and "he" in out["err"]
+    assert out["err"] is None
+    assert out["audit"]["backend"] == "paillier"
 
+
+def test_shim_r_dialect_autoroutes_encrypted(he_source, monkeypatch):
+    # R mode over an encrypted source -> r-he
+    _, src = he_source
+    _patch_registry(monkeypatch, src)
+    out = safepy_shim.run_extended(
+        "aggregate(salary ~ region, data=df, FUN=mean)",
+        [{"alias": "df", "source_id": "he_test"}], dialect="r")
+    assert out["err"] is None
+    assert out["audit"]["dialect"] == "r-he"
+    assert out["audit"]["backend"] == "paillier"
+
+
+def test_shim_encrypted_dialect_needs_encrypted_source(monkeypatch):
     plain = {"source_id": "p", "kind": "url", "location": "https://x/y.csv",
              "format": "csv", "level": "public", "status": "active"}
     _patch_registry(monkeypatch, plain)
     out = safepy_shim.run_extended(
         "df.value_counts('region')",
         [{"alias": "df", "source_id": "p"}], dialect="he")
-    assert out["err"] and "ikke en kryptert" in out["err"]
+    assert out["err"] and "ikke kryptert" in out["err"]
