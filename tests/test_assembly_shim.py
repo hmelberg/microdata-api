@@ -43,3 +43,32 @@ def test_remote_assembly_missing_column_errors(monkeypatch):
         "panel.sum()", [{"alias": "p", "source_id": "people"}],
         dialect="pandas", assembly=spec)
     assert out["err"] and "salary" in out["err"]
+
+
+def test_remote_assembly_surfaces_row_multiplication_note(monkeypatch):
+    # a many-to-many join inflates rows; the note (spec §6) must reach results
+    people = pd.DataFrame({"pid": [1, 2], "income": [10, 20]})
+    sales = pd.DataFrame({"pid": [1, 1, 2], "amount": [5, 6, 7]})
+    _patch(monkeypatch, {"people": people, "salesrc": sales})
+    spec = {"sources": ["p", "s"], "datasets": [
+        {"name": "sales", "load": "s"},
+        {"name": "panel", "key": "pid", "steps": [
+            {"op": "import", "source": "p", "columns": ["income"], "how": "left"},
+            {"op": "join", "from": "sales", "on": "pid", "how": "left"}]}]}
+    out = safepy_shim.run_extended(
+        "panel.groupby('pid')['amount'].sum()",
+        [{"alias": "p", "source_id": "people"}, {"alias": "s", "source_id": "salesrc"}],
+        dialect="pandas", assembly=spec)
+    assert out["err"] is None
+    assert any("rader etter join" in r for r in out["results"])
+
+
+def test_remote_assembly_unknown_alias_norsk(monkeypatch):
+    _patch(monkeypatch, {"people": PEOPLE})
+    spec = {"sources": ["ghost"], "datasets": [
+        {"name": "panel", "key": "pid", "steps": [
+            {"op": "import", "source": "ghost", "columns": ["income"], "how": "left"}]}]}
+    out = safepy_shim.run_extended(
+        "panel.sum()", [{"alias": "p", "source_id": "people"}],
+        dialect="pandas", assembly=spec)
+    assert out["err"] and "ukjent kilde-alias" in out["err"]

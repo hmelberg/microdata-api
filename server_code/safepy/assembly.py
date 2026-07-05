@@ -72,7 +72,10 @@ def build_datasets(spec: dict, resolver):
                     raise AssemblyError(
                         f"kolonnen «{missing[0]}» finnes ikke i kilden "
                         f"«{step['source']}» (har: {', '.join(map(str, src.columns))})")
-                piece = src[[key] + list(step["columns"])].copy()
+                # the key is always carried; drop it from the value columns if
+                # the caller also listed it (import p/pid — avoids a dup select)
+                _cols = [c for c in step["columns"] if c != key]
+                piece = src[[key] + _cols].copy()
                 if acc is None:
                     acc = piece                       # first import establishes rows
                 else:

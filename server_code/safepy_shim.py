@@ -112,14 +112,17 @@ def run_extended(script, sources_req, dialect="pandas", on_progress=None,
         return _error_shape(
             script, "kan ikke blande krypterte og ukrypterte kilder i én kjøring")
 
+    _asm_notes = []
     if assembly:
         if n_he:
             return _error_shape(
                 script, "montering støtter ikke krypterte (HE) kilder ennå")
         try:
             from safepy import assembly as _asm
-            built, _notes = _asm.build_datasets(assembly, lambda a: frames[a])
-        except Exception as exc:      # AssemblyError or missing alias
+            built, _asm_notes = _asm.build_datasets(assembly, lambda a: frames[a])
+        except KeyError as exc:       # kilde-alias i spec finnes ikke blant kildene
+            return _error_shape(script, f"montering: ukjent kilde-alias {exc}")
+        except Exception as exc:      # AssemblyError m.m. (norsk melding)
             return _error_shape(script, str(exc))
         frames = built                # analysis runs against assembled datasets
 
@@ -149,6 +152,14 @@ def run_extended(script, sources_req, dialect="pandas", on_progress=None,
                      dialect=effective, render="plotly", on_result=cb)
     d = res.as_dict()
     out = _to_client_shape(script, d)
+    # Montering: rad-multiplikasjons-varsler (spec §6) må vises også på server-
+    # og strict-baner — det er nettopp her et many-to-many-join blåser opp
+    # aggregatene før undertrykking. Legg dem først i resultatlista.
+    if _asm_notes:
+        import html as _h
+        note_html = "".join(f"<pre style=\"opacity:.7\">{_h.escape(str(n))}</pre>"
+                            for n in _asm_notes)
+        out["results"] = [note_html] + (out.get("results") or [])
     import query_audit
     out["_audit_releases"] = query_audit.collect_fingerprints(d)
     out["_audit_level"] = level
