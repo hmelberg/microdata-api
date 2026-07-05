@@ -161,6 +161,7 @@ if _ANVIL:
                 "name": _cell(row, "name") or row["source_id"],
                 "kind": row["kind"], "location": row["location"] or "",
                 "format": _cell(row, "format") or "csv", "level": row["level"],
+                "local_mode": _cell(row, "local_mode") or "",
                 "status": row["status"], "has_key": bool(_cell(row, "enc_key")),
                 "access_policy": _cell(row, "access_policy") or {}}
 

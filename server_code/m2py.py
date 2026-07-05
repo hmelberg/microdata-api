@@ -7218,7 +7218,10 @@ class MicroInterpreter:
             g["df"] = self.datasets[an]
         else:
             g["active_df"] = None
-            g["df"] = None
+            # Ikke klobre et datasett som faktisk heter 'df' (vanlig alias for
+            # web-load med make_active=False) — bind bare None når navnet er ledig.
+            if not any(str(dn) == "df" for dn in self.datasets):
+                g["df"] = None
 
     def _eval_let_expression(self, expr):
         """Evaluerer let-uttrykk: 'streng', tall, $ref, eller a ++ b ++ ..."""
