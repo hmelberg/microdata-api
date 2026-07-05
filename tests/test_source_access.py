@@ -67,6 +67,13 @@ def test_grant_mode3_releases_unwrapped_key():
     assert st == "grant" and p["key"] == "K1"
 
 
+def test_strict_grant_never_includes_key():
+    wrapped = media_crypto.encrypt_bytes(b"K1").decode("ascii")
+    st, p = source_access.access_decision(
+        _src(enc_key=wrapped, local_mode="strict"), "ana@fhi.no")
+    assert st == "grant" and "key" not in p
+
+
 def test_no_policy_legacy_source_grants_any_login():
     st, p = source_access.access_decision(
         _src(access_policy=None, kind="url", encrypted=False), "hvem@somhelst.no")

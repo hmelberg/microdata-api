@@ -767,3 +767,40 @@ def http_source_access(**kwargs):
         except Exception:
             pass  # revisjon skal aldri blokkere selve utleveringen
     return _json(payload)
+
+
+# ---------------------------------------------------------------------------
+# /local_run_authorize  (V3: hver lokale strict-kjøring autoriseres og logges;
+# nøkler for strict-kilder utleveres KUN her — aldri via /source_access.)
+
+
+@anvil.server.http_endpoint("/local_run_authorize", methods=["POST"],
+                            cross_site_session=False, enable_cors=True)
+def http_local_run_authorize():
+    import source_registry
+    import source_access
+    import query_audit
+    principal, autherr = _authenticate_or_fail()
+    if autherr:
+        return _json({"error": "unknown"}, status=404)
+    user = auth.principal_user(principal)
+    email = user["email"] if user is not None else None
+    body = _load_body()
+    source_ids = [str(s).strip() for s in (body.get("source_ids") or []) if str(s).strip()]
+    script = body.get("script") or ""
+    if not source_ids:
+        return _json({"error": "missing 'source_ids'"}, status=400)
+    srcs = []
+    for sid in source_ids:
+        try:
+            srcs.append(source_registry.resolve_source(sid))
+        except KeyError:
+            return _json({"error": "unknown"}, status=404)
+    ok, keys, level = source_access.authorize_local_run(srcs, email)
+    if not ok:
+        return _json({"error": "unknown"}, status=404)
+    import uuid
+    query_audit.log_run(auth.principal_alias(principal), str(uuid.uuid4()),
+                        source_ids, level, "local-strict", script,
+                        "local_strict_run", None, [], 0)
+    return _json({"ok": True, "source_keys": keys, "level": level})

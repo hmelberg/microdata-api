@@ -54,7 +54,35 @@ def access_decision(src: dict, email: str | None):
         "local_profile": "strict" if local_mode == "strict" else "open",
         "level": level,
     }
-    if src.get("kind") == "encrypted_url" and src.get("enc_key"):
+    if (src.get("kind") == "encrypted_url" and src.get("enc_key")
+            and out["local_profile"] == "open"):
         from media_crypto import decrypt_bytes
         out["key"] = decrypt_bytes(src["enc_key"].encode("ascii")).decode("ascii")
     return "grant", out
+
+
+_LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
+
+
+def authorize_local_run(srcs: list, email: str | None):
+    """Per-run gate for local strict runs (spec V3). Every source must allow
+    the caller AND allow local execution; returns the per-source stored keys
+    (Fernet-unwrapped) and the most restrictive level for the policy tier.
+    -> (ok, source_keys, level). Pure; the endpoint logs the audit row."""
+    keys, level = {}, "public"
+    for src in srcs:
+        policy = src.get("access_policy")
+        if policy is not None and not email_allowed(email, policy, src.get("owner_email") or ""):
+            return False, {}, level
+        local_mode = src.get("local_mode") or (
+            "open" if (src.get("level") or "protected") == "public" else "none")
+        if local_mode == "none":
+            return False, {}, level
+        if src.get("kind") == "encrypted_url" and src.get("enc_key"):
+            from media_crypto import decrypt_bytes
+            keys[src["source_id"]] = decrypt_bytes(
+                src["enc_key"].encode("ascii")).decode("ascii")
+        lv = src.get("level") or "protected"
+        if _LEVEL_ORDER.get(lv, 1) > _LEVEL_ORDER[level]:
+            level = lv
+    return True, keys, level
