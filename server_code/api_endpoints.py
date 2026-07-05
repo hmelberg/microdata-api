@@ -726,3 +726,44 @@ def http_source_info(**kwargs):
     if is_public:
         out["location"] = src.get("location")
     return _json(out)
+
+
+# ---------------------------------------------------------------------------
+# /source_access  (per-source grant for LOCAL analysis: location + evt. nøkkel)
+# Spec: m2py docs/superpowers/specs/2026-07-05-encrypted-external-sources-design.md §3.
+# 404 (aldri 401/403) for ukjent, anonym eller ikke-autorisert — som /source_info.
+
+
+@anvil.server.http_endpoint("/source_access", methods=["GET"],
+                            cross_site_session=False, enable_cors=True)
+def http_source_access(**kwargs):
+    import source_registry
+    import source_access
+    sid = (kwargs.get("id") or "").strip()
+    if not sid:
+        return _json({"error": "missing 'id'"}, status=400)
+    unknown = {"error": f"unknown source: {sid}"}
+    try:
+        src = source_registry.resolve_source(sid)
+    except KeyError:
+        return _json(unknown, status=404)
+    principal, autherr = _authenticate_or_fail()
+    if autherr:
+        return _json(unknown, status=404)
+    user = auth.principal_user(principal)
+    email = user["email"] if user is not None else None
+    status, payload = source_access.access_decision(src, email)
+    if status == "denied":
+        return _json(unknown, status=404)
+    if payload.get("key"):
+        # Hver nøkkelutlevering revideres (spec §3). Aldri selve nøkkelen.
+        try:
+            import datetime as _dt
+            from anvil.tables import app_tables
+            app_tables.audit_log.add_row(
+                when=_dt.datetime.now(_dt.timezone.utc),
+                who=email or auth.principal_alias(principal),
+                action="key_released", detail=sid)
+        except Exception:
+            pass  # revisjon skal aldri blokkere selve utleveringen
+    return _json(payload)
