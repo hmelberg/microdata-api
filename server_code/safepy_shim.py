@@ -43,7 +43,7 @@ _LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
 
 
 def run_extended(script, sources_req, dialect="pandas", on_progress=None,
-                 source_keys=None):
+                 source_keys=None, assembly=None):
     """Execute `script` in `dialect` against registry sources via safepy STRICT.
 
     Levels and locations come from the registry only — never the request. The
@@ -53,6 +53,13 @@ def run_extended(script, sources_req, dialect="pandas", on_progress=None,
     kind="encrypted_url"-kilder der eieren ikke lagret nøkkelen (mode 2).
     Brukes kun i minnet; logges aldri (query_audit skrubber script-nøkler,
     og source_keys skrives aldri noe sted).
+
+    ``assembly`` (optional): an AssemblySpec (dict). When given, each requested
+    source is resolved to a raw DataFrame as usual, and then
+    ``safepy.assembly.build_datasets`` (trusted code, run OUTSIDE the safepy
+    facade) assembles the named datasets described by the spec. Those ASSEMBLED
+    datasets — not the raw source frames — are what `safepy.run` analyses.
+    v1 assembly requires plaintext frames; HE sources are rejected up front.
 
     ``on_progress`` (optional): called with one client-shaped fragment dict —
     {"kind": "html"|"note", "html": ...} — per released statement while the run
@@ -104,6 +111,17 @@ def run_extended(script, sources_req, dialect="pandas", on_progress=None,
     if n_he and n_he != len(frames):
         return _error_shape(
             script, "kan ikke blande krypterte og ukrypterte kilder i én kjøring")
+
+    if assembly:
+        if n_he:
+            return _error_shape(
+                script, "montering støtter ikke krypterte (HE) kilder ennå")
+        try:
+            from safepy import assembly as _asm
+            built, _notes = _asm.build_datasets(assembly, lambda a: frames[a])
+        except Exception as exc:      # AssemblyError or missing alias
+            return _error_shape(script, str(exc))
+        frames = built                # analysis runs against assembled datasets
 
     # encrypted sources switch the run to the homomorphic variant of the language
     effective = _HE_VARIANT.get(dialect, dialect) if n_he else dialect

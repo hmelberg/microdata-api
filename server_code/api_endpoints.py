@@ -553,7 +553,7 @@ def http_run():
 @anvil.server.background_task
 def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
                     audit_alias=None, audit_request_id=None, audit_source_ids=None,
-                    source_keys=None):
+                    source_keys=None, assembly=None):
     import time
     import safepy_shim
     import query_audit
@@ -586,7 +586,8 @@ def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
         if dialect in safepy_shim.SAFEPY_DIALECTS:
             out = safepy_shim.run_extended(script, sources_req, dialect=dialect,
                                            on_progress=_on_progress,
-                                           source_keys=source_keys)
+                                           source_keys=source_keys,
+                                           assembly=assembly)
         else:
             out = m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
         if isinstance(out, dict) and out.get("err"):
@@ -666,6 +667,9 @@ def http_run_extended():
     dialect = (body.get("dialect") or "m2py").lower()
     if dialect != "m2py" and dialect not in safepy_shim.SAFEPY_DIALECTS:
         return _json({"error": f"unknown dialect: {dialect}"}, status=400)
+    assembly = body.get("assembly")
+    if assembly is not None and not isinstance(assembly, dict):
+        return _json({"error": "assembly må være et objekt (AssemblySpec)"}, status=400)
 
     # Audit layer v1: quota gate before compute (spec 2026-07-04).
     import uuid
@@ -686,7 +690,7 @@ def http_run_extended():
 
     task = anvil.server.launch_background_task(
         "bg_run_extended", script, sources_req, backend, raw, dialect,
-        alias, request_id, source_ids, source_keys)
+        alias, request_id, source_ids, source_keys, assembly)
     return _json({"task_id": task.get_id(), "mode": "async"})
 
 
