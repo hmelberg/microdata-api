@@ -610,17 +610,47 @@ def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
 @anvil.server.http_endpoint("/run_extended", methods=["POST"],
                             cross_site_session=False, enable_cors=True)
 def http_run_extended():
-    # Remote execution always requires login (it uses Anvil compute, and
-    # non-public sources are forced remote). The server re-resolves each
-    # source's level from the registry; it never trusts the request.
-    principal, err = _authenticate_or_fail()
-    if err:
-        return err
+    # Remote execution: the server re-resolves each source's level AND access
+    # policy from the registry; it never trusts the request. Login is required
+    # UNLESS every requested source is audience="anyone" (owner opt-in) — those
+    # accept an anonymous caller, still suppressed, quota'd and logged. Keys and
+    # locations are never released here (server-mediated compute only).
+    import source_registry
+    import source_access
     body = _load_body()
     script = (body.get("script") or "").strip()
     if not script:
         return _json({"error": "missing 'script'"}, status=400)
     sources_req = body.get("sources") or []
+
+    resolved = []
+    all_anyone = bool(sources_req)
+    for s in sources_req or []:
+        sid = (s or {}).get("source_id")
+        src = None
+        if sid:
+            try:
+                src = source_registry.resolve_source(sid)
+            except KeyError:
+                src = None
+        resolved.append(src)
+        if src is None or source_access.audience_of(src.get("access_policy")) != "anyone":
+            all_anyone = False
+
+    if all_anyone:
+        principal, _autherr = _authenticate_or_fail()   # opportunistisk; ikke påkrevd
+    else:
+        principal, err = _authenticate_or_fail()
+        if err:
+            return err
+    _user = auth.principal_user(principal) if principal else None
+    _email = _user["email"] if _user is not None else None
+
+    # Per-kilde tilgangssjekk (audience) — 404 uten å lekke eksistens, som andre baner.
+    for src in resolved:
+        if src is not None and not source_access.caller_allowed(src, _email):
+            return _json({"error": f"unknown source: {src['source_id']}"}, status=404)
+
     backend = body.get("backend") or "pandas"
     raw = bool(body.get("raw", False))
     # Per-run dekrypteringsnøkler for encrypted_url-kilder (mode 2). Brukes i
@@ -640,7 +670,9 @@ def http_run_extended():
     # Audit layer v1: quota gate before compute (spec 2026-07-04).
     import uuid
     import query_audit
-    alias = auth.principal_alias(principal)
+    # Anonym «anyone»-kjøring: gi en anonym-alias så kvote/revisjon klassifiserer
+    # riktig (public=fri, protected=25/døgn, sensitive=0/nektes).
+    alias = auth.principal_alias(principal) if principal else "anonymous:public"
     request_id = str(uuid.uuid4())
     source_ids, level = query_audit.resolve_run_levels(sources_req)
     allowed, msg = query_audit.check_budget(alias, level, source_ids,

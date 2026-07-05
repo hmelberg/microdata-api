@@ -116,3 +116,61 @@ def test_local_mode_invalid_refused():
     raw, _, _ = _env_raw()
     with pytest.raises(ValueError, match="local_mode"):
         owner_sources.validate_registration(_fields(local_mode="fri"), raw)
+
+
+# ---- audience + HE registration (2026-07-05 follow-up) --------------------
+
+def test_audience_field_stored_in_policy():
+    raw, _, _ = _env_raw()
+    v = owner_sources.validate_registration(_fields(audience="anyone"), raw)
+    assert v["access_policy"]["audience"] == "anyone"
+    # utelatt audience → ingen nøkkel i policy (audience_of → "listed")
+    v2 = owner_sources.validate_registration(_fields(), raw)
+    assert "audience" not in v2["access_policy"]
+
+
+def test_audience_invalid_refused():
+    raw, _, _ = _env_raw()
+    with pytest.raises(ValueError, match="audience"):
+        owner_sources.validate_registration(_fields(audience="alle"), raw)
+
+
+def _he_artifact():
+    import numpy as np
+    import pandas as pd
+    from safepy import he
+    df = pd.DataFrame({"region": np.where(np.arange(50) < 25, "A", "B"),
+                       "salary": 30000 + np.arange(50) * 100})
+    ds, priv = he.encrypt_dataframe(df, value_cols=["salary"],
+                                    group_cols=["region"], key_bits=256,
+                                    winsorize=(0.01, 0.99))
+    import json as _j
+    return _j.dumps(ds).encode(), ds, _j.dumps(he.serialize_private_key(priv))
+
+
+def test_he_registration_stores_wrapped_key_and_forces_remote():
+    from safepy import he
+    raw, ds, key_json = _he_artifact()
+    v = owner_sources.validate_registration(
+        _fields(level="protected", audience="anyone", he_private_key=key_json), raw)
+    assert v["format"] == "he" and v["kind"] == "url"
+    assert v["local_mode"] == "none" and v["default_exec"] == "remote"
+    assert v["fingerprint"] == he.dataset_fingerprint(ds)
+    assert v["_store_he_key"] == key_json      # ren nøkkel returneres for innpakking
+    assert v["_store_key"] is None
+    assert v["access_policy"]["audience"] == "anyone"
+
+
+def test_he_registration_requires_key():
+    raw, _, _ = _he_artifact()
+    with pytest.raises(ValueError, match="he_private_key"):
+        owner_sources.validate_registration(_fields(level="protected"), raw)
+
+
+def test_he_registration_rejects_wrong_key():
+    from safepy import he
+    raw, _, _ = _he_artifact()
+    _, _, other_key = _he_artifact()          # nøkkel til en annen artefakt
+    with pytest.raises(ValueError, match="offentlige nøkkel"):
+        owner_sources.validate_registration(
+            _fields(level="protected", he_private_key=other_key), raw)

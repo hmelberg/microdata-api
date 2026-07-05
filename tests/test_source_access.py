@@ -105,3 +105,53 @@ def test_protected_strict_grants_locally_with_level():
 def test_protected_default_still_remote_only():
     st, p = source_access.access_decision(_src(level="protected"), "ana@fhi.no")
     assert st == "remote_only"
+
+
+# ---- audience model (2026-07-05 follow-up) --------------------------------
+
+def test_audience_of_defaults():
+    assert source_access.audience_of(None) == "authenticated"        # legacy row
+    assert source_access.audience_of({"emails": []}) == "listed"     # self-reg, no audience
+    assert source_access.audience_of({"audience": "anyone"}) == "anyone"
+    assert source_access.audience_of({"audience": "tull"}) == "listed"  # ugyldig → listed
+
+
+def test_caller_allowed_owner_audience():
+    src = _src(access_policy={"audience": "owner", "emails": [], "domains": []})
+    assert source_access.caller_allowed(src, "eier@fhi.no")       # owner
+    assert not source_access.caller_allowed(src, "ana@fhi.no")    # listed ignoreres
+    assert not source_access.caller_allowed(src, None)
+
+
+def test_caller_allowed_authenticated_audience():
+    src = _src(access_policy={"audience": "authenticated"})
+    assert source_access.caller_allowed(src, "hvemsomhelst@x.no")  # enhver innlogget
+    assert not source_access.caller_allowed(src, None)             # men ikke anonym
+
+
+def test_caller_allowed_anyone_audience():
+    src = _src(access_policy={"audience": "anyone"})
+    assert source_access.caller_allowed(src, None)                 # også anonym
+    assert source_access.caller_allowed(src, "x@y.no")
+
+
+def test_caller_allowed_listed_audience_still_works():
+    src = _src(access_policy={"audience": "listed", "emails": ["ana@fhi.no"], "domains": ["uio.no"]})
+    assert source_access.caller_allowed(src, "ana@fhi.no")
+    assert source_access.caller_allowed(src, "per@uio.no")
+    assert not source_access.caller_allowed(src, "x@y.no")
+
+
+def test_access_decision_denies_by_audience():
+    src = _src(access_policy={"audience": "authenticated"})
+    assert source_access.access_decision(src, None)[0] == "denied"        # anonym nektes lokalt
+    assert source_access.access_decision(src, "x@y.no")[0] == "grant"     # innlogget ok
+
+
+def test_authorize_local_run_honors_audience():
+    src = _src(level="protected", local_mode="strict",
+               access_policy={"audience": "authenticated"})
+    ok, _, _ = source_access.authorize_local_run([src], None)
+    assert not ok                                                          # anonym
+    ok, _, _ = source_access.authorize_local_run([src], "hvem@somhelst.no")
+    assert ok
