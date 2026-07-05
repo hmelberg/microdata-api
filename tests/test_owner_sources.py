@@ -98,10 +98,18 @@ def test_local_mode_default_by_level():
 
 
 def test_local_mode_explicit_strict_on_protected():
+    raw, _, _ = _env_raw()
     v = owner_sources.validate_registration(
-        _fields(level="protected", local_mode="strict",
-                location="https://x.example/d.csv"), CSV)
-    assert v["local_mode"] == "strict"
+        _fields(level="protected", local_mode="strict"), raw)
+    assert v["local_mode"] == "strict" and v["kind"] == "encrypted_url"
+
+
+def test_local_mode_strict_requires_encrypted_source():
+    # V4-garantiene gjelder bare konvolutter — strict på ukryptert fil nektes
+    with pytest.raises(ValueError, match="krever en kryptert kilde"):
+        owner_sources.validate_registration(
+            _fields(level="protected", local_mode="strict",
+                    location="https://x.example/d.csv"), CSV)
 
 
 def test_local_mode_invalid_refused():

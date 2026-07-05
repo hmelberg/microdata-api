@@ -65,6 +65,12 @@ def validate_registration(fields: dict, raw: bytes) -> dict:
         fmt = env.get("payload_format") or fmt
         if key:
             encfile.decrypt_envelope(env, key)   # raises "feil nøkkel..." if wrong
+    elif local_mode == "strict":
+        # Strict-lokal forutsetter kryptert kilde: V4-garantiene (ingen klartekst
+        # på FS, dekrypter-ved-kjøring) og per-kjørings-nøkler gjelder bare
+        # safepy-enc-v1-konvolutter.
+        raise ValueError("local_mode=strict krever en kryptert kilde "
+                         "(safepy-enc-v1) — krypter filen først (encrypt.html)")
     else:
         kind = "url"
         fingerprint = None
