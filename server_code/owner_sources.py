@@ -20,6 +20,7 @@ import json
 MAX_BYTES = 50 * 1024 * 1024
 VALID_LEVELS = {"public", "protected", "sensitive"}
 VALID_FORMATS = {"csv", "parquet"}
+VALID_LOCAL_MODES = {"none", "strict", "open"}
 
 
 def _utcnow():
@@ -37,6 +38,10 @@ def validate_registration(fields: dict, raw: bytes) -> dict:
     level = (fields.get("level") or "").strip()
     if level not in VALID_LEVELS:
         raise ValueError(f"level må være en av {sorted(VALID_LEVELS)}")
+    local_mode = (fields.get("local_mode") or "").strip() \
+        or ("open" if level == "public" else "none")
+    if local_mode not in VALID_LOCAL_MODES:
+        raise ValueError(f"local_mode må være en av {sorted(VALID_LOCAL_MODES)}")
     fmt = (fields.get("format") or "csv").strip()
     if fmt not in VALID_FORMATS:
         raise ValueError(f"format må være en av {sorted(VALID_FORMATS)}")
@@ -88,6 +93,7 @@ def validate_registration(fields: dict, raw: bytes) -> dict:
         "location": location,
         "format": fmt,
         "level": level,
+        "local_mode": local_mode,
         "default_exec": "local" if level == "public" else "remote",
         "fingerprint": fingerprint,
         # alltid en policy for selvregistrerte kilder: tomme lister = kun eier

@@ -87,3 +87,24 @@ def test_policy_normalized_lowercase():
     v = owner_sources.validate_registration(
         _fields(emails=[" Ana@FHI.no "], domains=["@UiO.no"]), raw)
     assert v["access_policy"] == {"emails": ["ana@fhi.no"], "domains": ["uio.no"]}
+
+
+def test_local_mode_default_by_level():
+    raw, _, _ = _env_raw()
+    assert owner_sources.validate_registration(_fields(), raw)["local_mode"] == "open"
+    v = owner_sources.validate_registration(
+        _fields(level="protected", location="https://x.example/d.csv"), CSV)
+    assert v["local_mode"] == "none"
+
+
+def test_local_mode_explicit_strict_on_protected():
+    v = owner_sources.validate_registration(
+        _fields(level="protected", local_mode="strict",
+                location="https://x.example/d.csv"), CSV)
+    assert v["local_mode"] == "strict"
+
+
+def test_local_mode_invalid_refused():
+    raw, _, _ = _env_raw()
+    with pytest.raises(ValueError, match="local_mode"):
+        owner_sources.validate_registration(_fields(local_mode="fri"), raw)

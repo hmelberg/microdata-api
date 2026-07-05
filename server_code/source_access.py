@@ -8,9 +8,10 @@ Key release rules:
   - access_policy present  -> caller email must match (exact, @domain, or owner).
   - access_policy absent   -> legacy behavior: any logged-in caller passes
     (matches /source_info visibility for non-public sources).
-  - level != public        -> remote_only: never location, never key.
-  - level == public        -> grant location (+ Fernet-unwrapped key when the
-    owner stored one — mode 3 whitelist-only).
+  - local_mode == "none"   -> remote_only: never location, never key.
+  - local_mode != "none"   -> grant location (+ Fernet-unwrapped key when the
+    owner stored one — mode 3 whitelist-only), tagged with local_profile
+    ("open"|"strict") and level (the policy tier for the local engine).
 """
 from __future__ import annotations
 
@@ -31,11 +32,18 @@ def email_allowed(email: str | None, policy: dict | None, owner_email: str = "")
 
 
 def access_decision(src: dict, email: str | None):
-    """-> (status, payload); status in {"denied", "remote_only", "grant"}."""
+    """-> (status, payload); status in {"denied", "remote_only", "grant"}.
+
+    Grant table (spec 2026-07-05-browser-strict-execution §2): local_mode
+    decides whether rows may reach the browser at all ("none" -> remote_only),
+    and under which engine ("open" -> fri analyse, "strict" -> kun safepy-
+    fasaden, med nivået fra registreringen som policy-tier)."""
     policy = src.get("access_policy")
     if policy is not None and not email_allowed(email, policy, src.get("owner_email") or ""):
         return "denied", None
-    if src.get("level") != "public":
+    level = src.get("level") or "protected"
+    local_mode = src.get("local_mode") or ("open" if level == "public" else "none")
+    if local_mode == "none":
         return "remote_only", {"remote_only": True, "default_exec": "remote"}
     out = {
         "remote_only": False,
@@ -43,6 +51,8 @@ def access_decision(src: dict, email: str | None):
         "payload_format": src.get("format") or "csv",
         "fingerprint": src.get("fingerprint"),
         "encrypted": src.get("kind") == "encrypted_url",
+        "local_profile": "strict" if local_mode == "strict" else "open",
+        "level": level,
     }
     if src.get("kind") == "encrypted_url" and src.get("enc_key"):
         from media_crypto import decrypt_bytes

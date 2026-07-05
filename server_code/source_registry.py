@@ -62,6 +62,8 @@ def _row_to_source(row) -> dict:
         "file": row["file"],
         "format": row["format"],
         "level": level,
+        "local_mode": _cell(row, "local_mode")
+            or ("open" if level == "public" else "none"),
         "default_exec": row["default_exec"]
             or ("local" if level == "public" else "remote"),
         "encrypted": bool(_cell(row, "encrypted", False)),

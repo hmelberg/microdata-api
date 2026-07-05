@@ -71,3 +71,30 @@ def test_no_policy_legacy_source_grants_any_login():
     st, p = source_access.access_decision(
         _src(access_policy=None, kind="url", encrypted=False), "hvem@somhelst.no")
     assert st == "grant" and p["encrypted"] is False
+
+
+def test_grant_carries_local_profile_and_level():
+    st, p = source_access.access_decision(_src(), "ana@fhi.no")
+    assert st == "grant" and p["local_profile"] == "open" and p["level"] == "public"
+
+
+def test_public_strict_grants_strict_profile():
+    st, p = source_access.access_decision(_src(local_mode="strict"), "ana@fhi.no")
+    assert st == "grant" and p["local_profile"] == "strict"
+
+
+def test_public_local_none_is_remote_only():
+    st, p = source_access.access_decision(_src(local_mode="none"), "ana@fhi.no")
+    assert st == "remote_only"
+
+
+def test_protected_strict_grants_locally_with_level():
+    st, p = source_access.access_decision(
+        _src(level="protected", local_mode="strict"), "ana@fhi.no")
+    assert st == "grant" and p["local_profile"] == "strict"
+    assert p["level"] == "protected" and p["location"]
+
+
+def test_protected_default_still_remote_only():
+    st, p = source_access.access_decision(_src(level="protected"), "ana@fhi.no")
+    assert st == "remote_only"
