@@ -21,7 +21,7 @@ import anvil.users
 from anvil import BlobMedia
 from anvil.tables import app_tables
 
-VALID_KINDS = {"url", "media"}
+VALID_KINDS = {"url", "media", "encrypted_url"}
 VALID_FORMATS = {"csv", "parquet", "he"}   # "he" = safepy-he-v1 encrypted artifact
 VALID_LEVELS = {"public", "protected", "sensitive"}
 VALID_EXEC = {"local", "remote", "strict_remote"}

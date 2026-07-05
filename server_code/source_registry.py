@@ -7,9 +7,11 @@ Table (admin-managed, bytes stored as Anvil Media for kind="media"); the
 hardcoded fixtures below remain as a fallback so non-Anvil test runs and a
 fresh install keep working.
 
-Future seam: kind="encrypted_url" — location points at encrypted bytes (e.g. a
-GitHub repo) and the request carries a per-run decryption key that is used in
-memory and never stored.
+kind="encrypted_url" (spec m2py docs/superpowers/specs/2026-07-05-encrypted-
+external-sources-design.md): location points at a safepy-enc-v1 envelope (e.g.
+in a GitHub repo). The key comes per-run from the request (_run_key, mode 2 —
+never stored) or Fernet-unwrapped from the row (enc_key, mode 3); plaintext
+exists only in memory.
 
 format="he" (Plane B, safepy homomorphic-release design): the source is a
 Paillier-encrypted JSON artifact (safepy-he-v1) that may live at any URL — the
@@ -65,6 +67,10 @@ def _row_to_source(row) -> dict:
         "encrypted": bool(_cell(row, "encrypted", False)),
         "fingerprint": _cell(row, "fingerprint"),
         "he_key": _cell(row, "he_key"),
+        "enc_key": _cell(row, "enc_key"),
+        "access_policy": _cell(row, "access_policy"),
+        "owner_email": _cell(row, "owner_email") or "",
+        "name": _cell(row, "name") or row["source_id"],
         "status": "active",
     }
 
@@ -106,8 +112,45 @@ def load_dataframe(src: dict):
         name = getattr(src["file"], "name", "") or ""
         fmt = src.get("format") or ("parquet" if name.endswith(".parquet") else "csv")
         return pd.read_parquet(buf) if fmt == "parquet" else pd.read_csv(buf)
+    if src.get("kind") == "encrypted_url":
+        return _load_enc_envelope(src)
     from m2py_runtime.sources import read_source
     return read_source(src["location"], src.get("format"))
+
+
+def _load_enc_envelope(src: dict):
+    """kind="encrypted_url": location holds a safepy-enc-v1 envelope. The key
+    comes per-run (src["_run_key"], from the request) or Fernet-unwrapped from
+    the row (enc_key). Plaintext exists only in memory (spec §5)."""
+    import io
+    import json
+    import pandas as pd
+    from safepy import encfile
+
+    try:
+        env = json.loads(_raw_bytes(src).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        env = None
+    if not encfile.is_envelope(env):
+        raise ValueError(
+            f"kilden {src.get('source_id')!r} er ikke en safepy-enc-v1-fil")
+    want = src.get("fingerprint")
+    if want and encfile.envelope_fingerprint(env) != want:
+        raise ValueError(
+            f"kilden {src.get('source_id')!r} matcher ikke registrert fingerprint "
+            f"— filen kan være byttet ut siden registrering")
+    key = src.get("_run_key")
+    if not key and src.get("enc_key"):
+        from media_crypto import decrypt_bytes
+        key = decrypt_bytes(src["enc_key"].encode("ascii")).decode("ascii")
+    if not key:
+        raise ValueError(
+            f"kilden {src.get('source_id')!r} krever dekrypteringsnøkkel "
+            f"(key(...) i scriptet, eller nøkkel lagret ved registrering)")
+    data = encfile.decrypt_envelope(env, key)
+    buf = io.BytesIO(data)
+    fmt = env.get("payload_format") or src.get("format") or "csv"
+    return pd.read_parquet(buf) if fmt == "parquet" else pd.read_csv(buf)
 
 
 def _raw_bytes(src: dict) -> bytes:
