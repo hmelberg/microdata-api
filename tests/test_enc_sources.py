@@ -85,3 +85,29 @@ def test_load_dataframe_not_an_envelope(enc_source, monkeypatch):
     monkeypatch.setattr(source_registry, "_raw_bytes", lambda s: b"a,b\n1,2\n")
     with pytest.raises(ValueError, match="safepy-enc-v1"):
         source_registry.load_dataframe(src)
+
+
+def test_shim_source_keys_passthrough(enc_source, monkeypatch):
+    import safepy_shim
+    _, _, key, src = enc_source
+    src = dict(src, enc_key=None, level="protected")
+    monkeypatch.setattr(source_registry, "resolve_source",
+                        lambda sid: dict(src, source_id=sid))
+    out = safepy_shim.run_extended(
+        "df.groupby('region')['salary'].mean()",
+        [{"alias": "df", "source_id": "enc_test"}],
+        dialect="pandas", source_keys={"enc_test": key})
+    assert out["err"] is None
+    assert out["_audit_level"] == "protected"
+
+
+def test_shim_missing_source_key_fails_clean(enc_source, monkeypatch):
+    import safepy_shim
+    _, _, _, src = enc_source
+    src = dict(src, enc_key=None, level="protected")
+    monkeypatch.setattr(source_registry, "resolve_source",
+                        lambda sid: dict(src, source_id=sid))
+    out = safepy_shim.run_extended(
+        "df.groupby('region')['salary'].mean()",
+        [{"alias": "df", "source_id": "enc_test"}], dialect="pandas")
+    assert out["err"] and "nøkkel" in out["err"]

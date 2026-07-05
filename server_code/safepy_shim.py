@@ -44,11 +44,17 @@ _HE_VARIANT = {"pandas": "he", "he": "he", "r": "r-he", "r-he": "r-he",
 _LEVEL_ORDER = {"public": 0, "protected": 1, "sensitive": 2}
 
 
-def run_extended(script, sources_req, dialect="pandas", on_progress=None):
+def run_extended(script, sources_req, dialect="pandas", on_progress=None,
+                 source_keys=None):
     """Execute `script` in `dialect` against registry sources via safepy STRICT.
 
     Levels and locations come from the registry only — never the request. The
     most restrictive source level selects the safepy policy tier.
+
+    ``source_keys`` (optional): {source_id: dekrypteringsnøkkel} for
+    kind="encrypted_url"-kilder der eieren ikke lagret nøkkelen (mode 2).
+    Brukes kun i minnet; logges aldri (query_audit skrubber script-nøkler,
+    og source_keys skrives aldri noe sted).
 
     ``on_progress`` (optional): called with one client-shaped fragment dict —
     {"kind": "html"|"note", "html": ...} — per released statement while the run
@@ -73,6 +79,8 @@ def run_extended(script, sources_req, dialect="pandas", on_progress=None):
             src = resolve_source(sid)
         except KeyError:
             return _error_shape(script, f"ukjent kilde: {sid}")
+        if source_keys and sid in source_keys:
+            src = dict(src, _run_key=str(source_keys[sid]))
         # HE sources (format="he", Plane B) never decrypt to a frame; they are
         # carried as EncryptedSource and force the language's homomorphic variant.
         if (src.get("format") or "") == "he":
@@ -86,7 +94,12 @@ def run_extended(script, sources_req, dialect="pandas", on_progress=None):
             if dialect in ("he", "r-he"):
                 return _error_shape(
                     script, f"kilden '{sid}' er ikke kryptert — bruk en vanlig dialekt")
-            frames[alias] = load_dataframe(src)
+            try:
+                frames[alias] = load_dataframe(src)
+            except ValueError as exc:
+                # f.eks. manglende/feil dekrypteringsnøkkel eller byttet fil —
+                # ren feilmelding uten datainnhold
+                return _error_shape(script, str(exc))
         if _LEVEL_ORDER.get(src["level"], 1) > _LEVEL_ORDER[level]:
             level = src["level"]
 

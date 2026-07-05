@@ -552,7 +552,8 @@ def http_run():
 
 @anvil.server.background_task
 def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
-                    audit_alias=None, audit_request_id=None, audit_source_ids=None):
+                    audit_alias=None, audit_request_id=None, audit_source_ids=None,
+                    source_keys=None):
     import time
     import safepy_shim
     import query_audit
@@ -584,7 +585,8 @@ def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
     try:
         if dialect in safepy_shim.SAFEPY_DIALECTS:
             out = safepy_shim.run_extended(script, sources_req, dialect=dialect,
-                                           on_progress=_on_progress)
+                                           on_progress=_on_progress,
+                                           source_keys=source_keys)
         else:
             out = m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
         if isinstance(out, dict) and out.get("err"):
@@ -621,6 +623,13 @@ def http_run_extended():
     sources_req = body.get("sources") or []
     backend = body.get("backend") or "pandas"
     raw = bool(body.get("raw", False))
+    # Per-run dekrypteringsnøkler for encrypted_url-kilder (mode 2). Brukes i
+    # minnet av load_dataframe; logges aldri.
+    source_keys = body.get("source_keys") or {}
+    if not isinstance(source_keys, dict) or \
+            not all(isinstance(k, str) and isinstance(v, str)
+                    for k, v in source_keys.items()):
+        return _json({"error": "source_keys må være {source_id: nøkkel}"}, status=400)
     # dialect selects the engine: absent/"m2py" = legacy DSL path (unchanged);
     # a safepy dialect routes through the STRICT capability core.
     import safepy_shim
@@ -645,7 +654,7 @@ def http_run_extended():
 
     task = anvil.server.launch_background_task(
         "bg_run_extended", script, sources_req, backend, raw, dialect,
-        alias, request_id, source_ids)
+        alias, request_id, source_ids, source_keys)
     return _json({"task_id": task.get_id(), "mode": "async"})
 
 

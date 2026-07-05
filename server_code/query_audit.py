@@ -4,6 +4,7 @@ Spec: safepy/docs/superpowers/specs/2026-07-04-query-audit-layer-design.md.
 Pure logic in this module is Anvil-free (testable locally); everything that
 touches app_tables imports anvil lazily inside the function.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 WINDOW = timedelta(hours=24)
@@ -111,6 +112,15 @@ def pop_audit_info(out):
     return out.pop("_audit_releases", []), out.pop("_audit_level", None)
 
 
+_KEY_RE = re.compile(r"\b(key\()\s*(?!ask\s*\))[^)]*\)", re.IGNORECASE)
+
+
+def scrub_keys(script: str) -> str:
+    """key(<literal>) -> key(***) before a script is logged. key(ask) is not a
+    secret and is left readable."""
+    return _KEY_RE.sub(r"\1***)", script or "")
+
+
 def build_log_row(alias, request_id, source_ids, level, dialect, script,
                   status, error, releases, latency_ms) -> dict:
     """Pure construction of one audit_log row (the 12 columns of that table).
@@ -125,7 +135,7 @@ def build_log_row(alias, request_id, source_ids, level, dialect, script,
         "ts": datetime.now(timezone.utc), "request_id": request_id,
         "principal": alias or "", "principal_kind": classify_principal(alias or ""),
         "source_ids": list(source_ids or []), "level": level, "dialect": dialect,
-        "script_head": (script or "")[:20000], "status": status,
+        "script_head": scrub_keys(script)[:20000], "status": status,
         "error": (str(error)[:1000] if error else None),
         "releases": list(releases or []), "latency_ms": latency_ms,
     }

@@ -173,3 +173,23 @@ def test_build_log_row_truncates_script_and_error():
     assert len(row["error"]) == 1000
     assert row["principal"] == ""
     assert row["principal_kind"] == "api_key"
+
+
+def test_scrub_keys():
+    import query_audit
+    s = ("# connect x as h, key(qL7xK2mN9pR4sT6v)\n"
+         "# load h as df, key( abc )\n"
+         "# connect y as k, key(ask)\n")
+    out = query_audit.scrub_keys(s)
+    assert "qL7xK2mN9pR4sT6v" not in out and "abc" not in out
+    assert out.count("key(***)") == 2
+    assert "key(ask)" in out            # ikke en hemmelighet
+
+
+def test_build_log_row_scrubs_keys():
+    import query_audit
+    row = query_audit.build_log_row(
+        "user:a@b.no", "rid", ["s1"], "protected", "pandas",
+        "# connect s1 as h, key(HEMMELIG123)\ndf.head()", "ok", None, [], 5)
+    assert "HEMMELIG123" not in row["script_head"]
+    assert "key(***)" in row["script_head"]
