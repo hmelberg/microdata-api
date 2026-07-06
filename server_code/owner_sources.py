@@ -204,7 +204,8 @@ if _ANVIL:
                 "audience": pol.get("audience") or "listed",
                 "status": row["status"],
                 "has_key": bool(_cell(row, "enc_key") or _cell(row, "he_key")),
-                "access_policy": pol}
+                "access_policy": pol,
+                "pending_requests": _cell(row, "pending_requests") or []}
 
     @anvil.server.http_endpoint("/sources/register", methods=["POST"],
                                 cross_site_session=False, enable_cors=True)
