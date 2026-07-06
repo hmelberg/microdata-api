@@ -488,8 +488,8 @@ def _base_r(verbs, code: str, env: dict) -> Released:
 
 def _feols(verbs, argstr: str, env: dict) -> Released:
     """fixest ``feols(y ~ x1 + x2 | fe1 + fe2, data=df, cluster=g)`` -> the shared
-    feols verb (fixed effects absorbed, per-term suppression). IV form
-    (``| endog ~ z``) is not translated yet."""
+    feols verb (fixed effects absorbed, per-term suppression). Also handles the
+    IV form (``y ~ x | fe | endog ~ instruments``), routed to ``verbs.iv``."""
     formula = data = None
     cluster = None
     for a in _split_top(argstr, [","]):
@@ -626,14 +626,19 @@ def _parse_aes(argstr: str) -> dict:
 
 def _ggplot(verbs, code: str, env: dict) -> Released:
     """Translate a ``ggplot(df, aes(...)) + geom_*()`` chain to the safe chart
-    path: geom_bar -> value_counts, geom_histogram -> suppressed hist, geom_boxplot
-    -> suppressed box. Raw-row geoms (geom_point/line/col/...) are refused."""
+    path: geom_bar/geom_freqpoly -> value_counts (bar/line), geom_histogram ->
+    suppressed hist, geom_boxplot -> suppressed box. A ``coord_flip()``/
+    ``coord_polar(...)`` layer on top of geom_bar renders the same suppressed
+    value_counts aggregate as barh/pie instead — same data, same safety
+    invariant, matching the render kinds Python's ``.plot`` accessor already
+    offers on any aggregate (bar/barh/line/area/pie). Raw-row geoms
+    (geom_point/line/col/...) are refused."""
     from .safeframe import SafeFrame
     layers = _split_top(code, ["+"])
     gm = re.match(r"^ggplot\s*\((.*)\)$", layers[0].strip(), re.S)
     if not gm:
         raise ValidationError("could not parse ggplot(...)", kind="syntax")
-    data, aes, geom = None, {}, None
+    data, aes, geom, coord = None, {}, None, None
     for a in _split_top(gm.group(1), [","]):
         a = a.strip()
         am = re.match(r"^aes\s*\((.*)\)$", a, re.S)
@@ -645,13 +650,19 @@ def _ggplot(verbs, code: str, env: dict) -> Released:
         elif _IDENT.match(a):
             data = data or a
     for layer in layers[1:]:
-        lm = re.match(r"^(geom_\w+)\s*\((.*)\)$", layer.strip(), re.S)
+        layer = layer.strip()
+        lm = re.match(r"^(geom_\w+)\s*\((.*)\)$", layer, re.S)
         if lm:
             geom = geom or lm.group(1)
             inner = re.search(r"aes\s*\((.*?)\)", lm.group(2), re.S)
             if inner:
                 aes.update(_parse_aes(inner.group(1)))
-        # non-geom layers (labs/theme/scale_*/coord_*/facet_*) are ignored
+            continue
+        if re.match(r"^coord_flip\s*\(\s*\)$", layer):
+            coord = "flip"
+        elif re.match(r"^coord_polar\s*\(.*\)$", layer, re.S):
+            coord = "polar"
+        # other non-geom layers (labs/theme/scale_*/facet_*) are ignored
     if data is None:
         raise ValidationError("ggplot needs a data frame", kind="syntax")
     if geom is None:
@@ -674,11 +685,21 @@ def _ggplot(verbs, code: str, env: dict) -> Released:
             raise DisclosureError("geom_boxplot needs aes(y = col)")
         _need_col(df, col)
         return sf[col].boxplot()
-    if geom in ("geom_bar", "geom_freqpoly"):
+    if geom == "geom_freqpoly":
+        if not x:
+            raise DisclosureError("geom_freqpoly needs aes(x = col)")
+        _need_col(df, x)
+        return sf.value_counts(x).plot.line()
+    if geom == "geom_bar":
         if not x:
             raise DisclosureError("geom_bar needs aes(x = col)")
         _need_col(df, x)
-        return sf.value_counts(x).plot.bar()
+        vc = sf.value_counts(x)
+        if coord == "polar":
+            return vc.plot.pie()
+        if coord == "flip":
+            return vc.plot.barh()
+        return vc.plot.bar()
     raise DisclosureError(f"ggplot geom '{geom}' is not supported")
 
 
