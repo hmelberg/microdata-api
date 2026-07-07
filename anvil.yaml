@@ -29,52 +29,20 @@ db_schema:
     columns:
     - admin_ui: {}
       client_hidden: null
-      name: ts
+      name: when
       type: datetime
     - admin_ui: {}
       client_hidden: null
-      name: request_id
+      name: who
       type: string
     - admin_ui: {}
       client_hidden: null
-      name: principal
+      name: action
       type: string
     - admin_ui: {}
       client_hidden: null
-      name: principal_kind
+      name: detail
       type: string
-    - admin_ui: {}
-      client_hidden: null
-      name: source_ids
-      type: simpleObject
-    - admin_ui: {}
-      client_hidden: null
-      name: level
-      type: string
-    - admin_ui: {}
-      client_hidden: null
-      name: dialect
-      type: string
-    - admin_ui: {}
-      client_hidden: null
-      name: script_head
-      type: string
-    - admin_ui: {}
-      client_hidden: null
-      name: status
-      type: string
-    - admin_ui: {}
-      client_hidden: null
-      name: error
-      type: string
-    - admin_ui: {}
-      client_hidden: null
-      name: releases
-      type: simpleObject
-    - admin_ui: {}
-      client_hidden: null
-      name: latency_ms
-      type: number
     indexes: []
     server: full
     title: audit_log
@@ -267,7 +235,7 @@ db_schema:
     - admin_ui: {}
       client_hidden: null
       name: owner_email
-      type: unresolved
+      type: string
     - admin_ui: {}
       client_hidden: null
       name: level
@@ -288,6 +256,10 @@ db_schema:
       client_hidden: null
       name: location
       type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: encrypted
+      type: bool
     indexes: []
     server: full
     title: sources
