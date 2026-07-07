@@ -1742,6 +1742,26 @@ def _coerce_code_value(code, is_alfa: bool):
     return int(cs) if cs.lstrip('-').isdigit() else cs
 
 
+def _codelist_uses_zero_padded_codes(realism_spec, meta) -> bool:
+    """H1: True når variabelens kodeunivers bruker null-paddede strengkoder
+    ('0301', '0104', ...). Slike koder MÅ genereres som nøyaktig de strengene —
+    samme koding som mockdata_export.normalize_for_microdata gir den statiske
+    parquet-en — ellers får live (float 301.0) og statisk ('0301') kilde ulik
+    dtype/verdirom for samme variabel, og `keep if kommune == '0301'` matcher
+    ingenting live. Sjekker labels + realism-distribusjoner (inkl. by_date)."""
+    keys = []
+    if isinstance(meta, dict) and isinstance(meta.get('labels'), dict):
+        keys.extend(meta['labels'].keys())
+    if isinstance(realism_spec, dict):
+        if isinstance(realism_spec.get('distribution'), dict):
+            keys.extend(realism_spec['distribution'].keys())
+        for _w in (realism_spec.get('by_date') or []):
+            if isinstance(_w, dict) and isinstance(_w.get('distribution'), dict):
+                keys.extend(_w['distribution'].keys())
+    return any(isinstance(k, str) and len(k) > 1 and k[0] == '0' and k.isdigit()
+               for k in keys)
+
+
 @lru_cache(maxsize=None)
 def _norway_synth_age_from_uid(unit_id) -> int:
     """Deterministisk alder 18–67 (typisk yrkesaktiv) for demo når fødselsdato mangler.
@@ -3339,7 +3359,12 @@ class MockDataEngine:
             if _family == 'categorical':
                 _vals = _mr.generate_categorical(_realism_spec, _ctx_df, as_of=_as_of, rng=rng)
                 _dt = (_realism_meta.get('data_type') or '').lower()
-                if _dt in ('float', 'int', 'integer', 'numeric'):
+                # H1: kodede kategoriske med null-paddede strengkoder ('0301')
+                # genereres som nøyaktig de strengene også live — matcher den
+                # statiske parquet-en (normalize_for_microdata) og entitets-
+                # genereringen. Float-cast (301.0) ga live/statisk dtype-splitt.
+                if (_dt in ('float', 'int', 'integer', 'numeric')
+                        and not _codelist_uses_zero_padded_codes(_realism_spec, _realism_meta)):
                     data[var_name] = [float(v) for v in _vals]
                 else:
                     data[var_name] = [str(v) for v in _vals]
@@ -4071,22 +4096,17 @@ class DataTransformHandler:
             target, expr = args['target'], args['expression']
             if target not in df.columns:
                 df[target] = np.nan
-            m = re.match(r'^(\d+)\s+if\s+(.+)$', expr.strip())
+            # B12: en '<n> if <cond>'-gren lå tidligere her, men parse_line
+            # splitter alltid ' if ' ut som egen betingelse før uttrykket når
+            # hit — grenen var død kode og er fjernet.
             row_mask = _line_condition_mask(df, cond, options) if cond else None
             if row_mask is None:
                 row_mask = slice(None)
-            if m:
-                val, c = int(m.group(1)), m.group(2)
-                mask = _py_eval_cond(df, c)
-                if cond:
-                    mask = mask & row_mask
-                df.loc[mask, target] = val
+            if cond:
+                sub = df.loc[row_mask]
+                df.loc[row_mask, target] = _py_eval_expr(sub, expr)
             else:
-                if cond:
-                    sub = df.loc[row_mask]
-                    df.loc[row_mask, target] = _py_eval_expr(sub, expr)
-                else:
-                    df[target] = _py_eval_expr(df, expr)
+                df[target] = _py_eval_expr(df, expr)
             return None
 
         if cmd == 'drop':
@@ -4796,12 +4816,9 @@ class StatsEngine:
             if isinstance(expr, str) and ('&' in expr or '|' in expr):
                 expr = _stata_like_bool_fixup(expr)
             line_cond = options.get('_condition')  # generate x = expr if cond => NaN der cond ikke holder
-            # Oversett "1 if cond" / "0 if cond" til np.where (microdata-lignende syntaks)
-            # Microdata-semantikk: der betingelsen IKKE holder → NaN (ikke komplement!)
-            m = re.match(r'^(\d+)\s+if\s+(.+)$', expr.strip())
-            if m:
-                val, cond_expr = int(m.group(1)), m.group(2)
-                expr = f"np.where({cond_expr}, {val}, np.nan)"
+            # B12: en '<n> if <cond>'-oversettelse lå tidligere her, men
+            # parse_line splitter alltid ' if ' ut som egen betingelse
+            # (_condition) før uttrykket når hit — grenen var død kode.
 
             # Evaluer generate-uttrykket med ren Python eval over df-kolonner og microdata-funksjoner
             evaluated = _py_eval_expr(df, expr)
@@ -4864,6 +4881,21 @@ class StatsEngine:
                     "collapse erstatter data med aggregert resultat; bruk én collapse med alle (stat) var -> navn i samme kommando, f.eks. collapse (mean) inntekt -> snitt (count) inntekt -> antall, by(kommune)",
                     missing=missing)
                 )
+            # B11: dupliserte målnavn — `collapse (mean) x (sd) x, by(g)` uten
+            # -> nye navn lot siste statistikk stille overskrive den første.
+            # microdata.no-dokumentasjonen definerer ingen auto-suffiks-atferd,
+            # så vi feiler høyt og ber om eksplisitte navn.
+            _seen_targets = set()
+            for t in args['targets']:
+                _tname = t['target'] or t['src']
+                if _tname in _seen_targets:
+                    raise ValueError(
+                        _t("collapse: målnavnet '{name}' brukes av flere statistikker — "
+                           "de ville stille overskrevet hverandre. Gi hvert mål eget navn "
+                           "med ->, f.eks. collapse (mean) {name} (sd) {name} -> {name}_sd.",
+                           name=_tname)
+                    )
+                _seen_targets.add(_tname)
             agg_dict = {}
             for t in args['targets']:
                 stat_fn = AGG_STAT_ALIAS.get(t['stat'], t['stat'])
@@ -7532,6 +7564,24 @@ class MicroInterpreter:
 
         # Kolonne er object/string: bruk streng for sammenligning
         prim = value if isinstance(value, str) else str(value)
+        if cl and not isinstance(value, str):
+            # H1-følge: numerisk kode mot strengkolonne — hent den kanoniske
+            # (null-paddede) strengnøkkelen fra kodelisten (301 -> '0301'),
+            # ellers matcher `keep if kommune == 301` aldri '0301'-strenger.
+            try:
+                _iv = int(value)
+            except (TypeError, ValueError):
+                _iv = None
+            if _iv is not None:
+                aux.setdefault('int_code', _iv)
+                for _k in cl:
+                    if isinstance(_k, str) and _k != prim:
+                        try:
+                            if int(_k) == _iv:
+                                aux.setdefault('str_code', _k)
+                                break
+                        except ValueError:
+                            continue
         if 'int_code' in aux and 'str_code' not in aux:
             aux['str_code'] = str(aux['int_code'])
         return prim, aux
@@ -8441,7 +8491,11 @@ class MicroInterpreter:
                 self._scrub_auto(df, columns, kwargs, key)
                 return
             if verb == 'risk':
-                rep = protect.risk(df, **kwargs)
+                # A2: scrub-risk(VAR1, VAR2) — listede variabler er quasi-identifikatorene
+                if columns and 'quasi_ids' not in kwargs:
+                    rep = protect.risk(df, list(columns), **kwargs)
+                else:
+                    rep = protect.risk(df, **kwargs)
                 self._log(rep.describe() if hasattr(rep, 'describe') else str(rep))
                 return
             if verb in COLUMN_VERBS:
@@ -9436,8 +9490,13 @@ class MicroInterpreter:
                                                   max_rows=None, max_cols=None)
                         # Legg til variabelnavn som data-attributter for tabulate
                         if cmd in ('tabulate', 'tabulate-panel') and isinstance(args, (list, tuple)):
-                            v1 = args[0] if len(args) > 0 else ''
-                            v2 = args[1] if len(args) > 1 else ''
+                            # S4: variabelnavn interpoleres i HTML-attributter og
+                            # konsumeres via innerHTML i appen — escape (inkl.
+                            # anførselstegn) så et fiendtlig kolonnenavn ikke kan
+                            # bryte ut av attributtet.
+                            import html as _html_mod
+                            v1 = _html_mod.escape(str(args[0] if len(args) > 0 else ''), quote=True)
+                            v2 = _html_mod.escape(str(args[1] if len(args) > 1 else ''), quote=True)
                             html = html.replace(
                                 'class="dataframe output-table"',
                                 f'class="dataframe output-table" data-var1="{v1}" data-var2="{v2}"',
@@ -9468,6 +9527,32 @@ class MicroInterpreter:
 
             # 5. Overlevelsesanalyse (cox, kaplan-meier, weibull)
             if cmd in ['cox', 'kaplan-meier', 'kaplan_meier', 'weibull']:
+                # T7 (D5): samme populasjonsminimum som summarize — en
+                # overlevelsesanalyse på et lite subsett avslører ellers
+                # akkurat det summarize nekter å vise (N, hendelser, tider).
+                if _is_disclosure_control():
+                    try:
+                        self._check_t7_summarize_pop(len(df_target), cmd)
+                        # kaplan-meier ..., by(g): hver gruppe rapporteres med
+                        # eksakt N/hendelser — sjekk per gruppe som summarize by().
+                        _t7_grp_col = opts.get('by') if cmd in ('kaplan-meier', 'kaplan_meier') else None
+                        if (_t7_grp_col and hasattr(df_target, 'columns')
+                                and _t7_grp_col in df_target.columns):
+                            _gc = df_target.groupby(_t7_grp_col, dropna=False).size()
+                            _min_pop = _dc_threshold('dc_min_summarize')
+                            _small = _gc[_gc < _min_pop]
+                            if len(_small) > 0:
+                                raise ValueError(
+                                    _t("Gruppen {gval} i {gvar} har {n} enheter. "
+                                       "microdata.no krever minst {min_pop} enheter "
+                                       "for deskriptiv statistikk ({cmd}) — også per "
+                                       "gruppe. Unntak: ren count/sum er tillatt.",
+                                       gval=_small.index[0], gvar=_t7_grp_col,
+                                       n=int(_small.iloc[0]), min_pop=_min_pop, cmd=cmd)
+                                )
+                    except ValueError as _t7_err:
+                        self._log(_t("FEIL: {err}", err=_t7_err))
+                        return
                 surv_opts = dict(opts)
                 surv_opts['_label_manager'] = self.label_manager
                 result = self.survival_handler.execute(cmd, df_target, args, surv_opts)
@@ -9488,6 +9573,14 @@ class MicroInterpreter:
 
             # 6a. coefplot
             if cmd == 'coefplot':
+                # T7 (D5): coefplot tilpasser en regresjon — samme
+                # populasjonsminimum som regresjonsgrenen under.
+                if _is_disclosure_control():
+                    try:
+                        self._check_t7_summarize_pop(len(df_target), cmd)
+                    except ValueError as _t7_err:
+                        self._log(_t("FEIL: {err}", err=_t7_err))
+                        return
                 import plotly.graph_objects as go
                 import plotly.io as pio
                 reg_cmd = args.get('reg_cmd', 'regress') if isinstance(args, dict) else 'regress'
@@ -9537,6 +9630,15 @@ class MicroInterpreter:
 
             # 6. Regresjon
             if cmd in ['regress', 'logit', 'probit', 'poisson', 'negative-binomial', 'negative-binomial-predict', 'regress-panel', 'regress-panel-predict', 'regress-panel-diff', 'hausman', 'regress-predict', 'probit-predict', 'logit-predict', 'mlogit', 'mlogit-predict', 'ivregress', 'ivregress-predict', 'rdd']:
+                # T7 (D5): regresjon på et subsett summarize ville nektet
+                # (N < dc_min_summarize) avslører de samme størrelsene via
+                # koeffisienter/N — samme populasjonsminimum som summarize.
+                if _is_disclosure_control():
+                    try:
+                        self._check_t7_summarize_pop(len(df_target), cmd)
+                    except ValueError as _t7_err:
+                        self._log(_t("FEIL: {err}", err=_t7_err))
+                        return
                 result = self.reg_engine.execute(cmd, df_target, args, opts)
                 summary, extra = result if isinstance(result, tuple) else (result, None)
                 self._log(_t("\n--- Modell: {cmd} ---\n{summary}\n", cmd=cmd, summary=summary))

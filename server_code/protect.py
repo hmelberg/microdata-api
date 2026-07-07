@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -39,10 +40,10 @@ _MESSAGES_EN = {
     # norsk nøkkel -> engelsk
     "{verb} er deterministisk per verdi; delvis anvendelse "
     "(share={share}) støttes ikke fordi det ville gitt inkonsistente "
-    "data. Bruk share=1.0 (standard).":
+    "data. Bruk share={default} (standard).":
         "{verb} is deterministic per value; partial application "
         "(share={share}) is not supported because it would produce "
-        "inconsistent data. Use share=1.0 (default).",
+        "inconsistent data. Use share={default} (default).",
     "k_min={k_min} < mål k={k}":
         "k_min={k_min} < target k={k}",
     "k-anonymisering nådde ikke mål k={k}: minste gruppe har "
@@ -153,17 +154,47 @@ def _resolve_random_state(random_state: int | np.random.Generator | None) -> np.
     return np.random.default_rng(random_state)
 
 
-def _reject_inert_share(share, verb: str) -> None:
-    """Deterministiske verb anvender seg på hver verdi likt. En `share` < 1
-    ble tidligere godtatt men stille ignorert; delvis anvendelse ville gitt
-    inkonsistente data (noen rader grovkornet, andre ikke). Avvis tydelig."""
-    if share is not None and share != 1.0:
+def _reject_inert_share(share, verb: str, default: float = 1.0) -> None:
+    """Deterministiske verb (eller verb-metoder) anvender seg på hver verdi
+    likt uansett `share`. En `share` som avviker fra verbets (eller
+    metodens) EGET nøytrale utgangspunkt (`default`) ble tidligere godtatt
+    men stille ignorert; delvis anvendelse ville gitt inkonsistente data
+    (noen rader grovkornet/byttet/omkodet, andre ikke) eller — for verb der
+    `share` rett og slett ikke leses — en illusjon av kontroll brukeren ikke
+    har. Avvis tydelig i stedet.
+
+    `default` lar denne ene hjelpefunksjonen dekke verb med ulik nøytral
+    `share` (winsorize/bin/coarsen/year/month: 1.0; swap sine
+    shuffle/pram-metoder: swap sin egen signatur-default 0.05 — se
+    `swap`-dokstrengen for hvorfor 0.05 er default der).
+    """
+    if share is not None and share != default:
         raise ValueError(_t(
             "{verb} er deterministisk per verdi; delvis anvendelse "
             "(share={share}) støttes ikke fordi det ville gitt inkonsistente "
-            "data. Bruk share=1.0 (standard).",
-            verb=verb, share=share,
+            "data. Bruk share={default} (standard).",
+            verb=verb, share=share, default=default,
         ))
+
+
+def _warn_inert_unit_id(unit_id, verb: str) -> None:
+    """`unit_id` only matters where a verb draws something ONCE per unit and
+    broadcasts it to that unit's rows (noise, jitter, ...). Verbs that are a
+    pure deterministic function of each value (winsorize, bin, ...) have
+    nothing to draw, so `unit_id` has zero effect there — it is accepted
+    only so `protect(recipe=..., unit_id=...)` can auto-inject it into every
+    verb's call uniformly without erroring. Warn (not raise) so a caller who
+    passed `unit_id` expecting per-unit consistency here learns it did
+    nothing, without breaking the `protect()` auto-injection path.
+    """
+    if unit_id is not None:
+        warnings.warn(
+            f"{verb}: unit_id={unit_id!r} has no effect — {verb} is a "
+            f"deterministic function of each value, with nothing to draw "
+            f"per unit. Accepted only for compatibility with "
+            f"protect(recipe=..., unit_id=...).",
+            stacklevel=2,
+        )
 
 
 def _validate_columns(data: pd.DataFrame, columns: str | Sequence[str]) -> list[str]:
@@ -299,7 +330,11 @@ def noise(
         multiplicative, 3 for group_mean group-size).
     method : {'gaussian', 'laplace', 'uniform', 'discrete', 'multiplicative', 'group_mean'}
     share : float in [0, 1], default 1.0
-        Fraction of units (or rows when unit_id is None) to perturb.
+        Fraction of units (or rows when unit_id is None) to perturb. Defaults
+        to 1.0 (perturb everyone) because a row left untouched leaks its own
+        exact value; contrast with `swap` (default 0.05) and `insert`
+        (default 0.01), where touching every row/adding many decoys would
+        itself distort the released statistics — see each verb's docstring.
     direction : {'both', 'up', 'down'}, default 'both'
         Asymmetric noise; clipped to non-negative or non-positive when not 'both'.
     clip : (lo, hi) | None
@@ -379,7 +414,13 @@ def noise(
             new = out[col].values + noise_arr
 
         if clip is not None:
-            new = np.clip(new, clip[0], clip[1])
+            # Only rows actually selected by `share` were perturbed (the
+            # rest have new == original, via the np.where(select_mask, ...)
+            # above); clipping the whole column would also alter values
+            # that were never touched by noise, silently expanding the
+            # verb's effect beyond `share`.
+            clipped = np.clip(new, clip[0], clip[1])
+            new = np.where(select_mask.values, clipped, new)
 
         out[col] = new
 
@@ -429,9 +470,20 @@ def _noise_group_mean(data: pd.DataFrame, col: str, k: int, by: str | None) -> p
 
     def _agg(s: pd.Series) -> pd.Series:
         sorted_idx = s.sort_values().index
+        n = len(sorted_idx)
         result = s.copy()
-        for start in range(0, len(sorted_idx), k):
-            group = sorted_idx[start:start + k]
+        starts = list(range(0, n, k))
+        # Ascending sort means a trailing remainder group (< k members) holds
+        # the LARGEST values in the series. Replacing it with its own mean
+        # (itself, if it's a singleton) would leave the most disclosive
+        # value unperturbed. Standard microaggregation practice: merge any
+        # such remainder into the last full group instead of giving it its
+        # own (too-small) group.
+        if len(starts) >= 2 and (n - starts[-1]) < k:
+            starts = starts[:-1]
+        for i, start in enumerate(starts):
+            end = starts[i + 1] if i + 1 < len(starts) else n
+            group = sorted_idx[start:end]
             result.loc[group] = s.loc[group].mean()
         return result
 
@@ -459,8 +511,21 @@ def jitter(
     Use for plot-safe perturbation; use `noise` when distribution and scale
     matter for downstream statistics.
 
-    Default scale='auto' computes 0.01 x column_range for numeric columns
-    and '1 day' for date columns.
+    share : float in [0, 1], default 1.0
+        Fraction of units (or rows when unit_id is None) to perturb. Same
+        rationale as `noise`'s default (1.0): an unperturbed row leaks its
+        own exact value, unlike `swap` (default 0.05) or `insert` (default
+        0.01) — see each verb's docstring.
+
+    Default scale='auto' computes 0.05 x column standard deviation for
+    numeric columns (uniform jitter drawn in [-scale, scale]) and '1 day'
+    for date columns. This mirrors `noise`'s own 'auto' convention
+    (0.05 x SD) so the two verbs are comparably protective; it deliberately
+    replaced an earlier 0.01 x column_range default, which was cosmetic —
+    recoverable to within 1% of the range regardless of how spread out (or
+    outlier-dominated) the column actually was. If a column has zero/NaN
+    SD, falls back to 0.01 x column_range (or 1.0 if that is also
+    degenerate).
     """
     rng = _resolve_random_state(random_state)
     columns = _validate_columns(data, columns)
@@ -474,6 +539,15 @@ def jitter(
     for col in columns:
         is_date = pd.api.types.is_datetime64_any_dtype(out[col])
         col_scale = _resolve_jitter_scale(out[col], scale, is_date)
+        if scale == "auto":
+            warnings.warn(
+                f"jitter(scale='auto') on column {col!r}: using "
+                f"distribution={distribution!r}, magnitude={col_scale!r} "
+                f"(uniform half-width or gaussian SD; see docstring for how "
+                f"'auto' is derived) — inspect before relying on this for "
+                f"disclosure control.",
+                stacklevel=2,
+            )
 
         if unit_id is not None:
             draws = _apply_per_unit(
@@ -495,10 +569,21 @@ def jitter(
 
 
 def _resolve_jitter_scale(series: pd.Series, scale, is_date: bool):
-    """Compute the effective scale for jitter, handling 'auto'."""
+    """Compute the effective scale for jitter, handling 'auto'.
+
+    Numeric 'auto' is 0.05 x column SD (same fraction `noise` uses for its
+    own 'auto'), not a fraction of the raw range — SD reflects the typical
+    spread of the data, whereas range is dominated by a single outlier pair
+    and can make 'auto' either negligibly small or needlessly huge. Falls
+    back to 0.01 x range (then 1.0) only when SD is unusable (0 or NaN,
+    e.g. a constant or all-NaN column).
+    """
     if scale == "auto":
         if is_date:
             return pd.Timedelta("1 day")
+        sd = float(series.std())
+        if sd and not np.isnan(sd):
+            return 0.05 * sd
         rng_ = float(series.max() - series.min())
         if rng_ == 0 or np.isnan(rng_):
             return 1.0
@@ -548,7 +633,17 @@ def winsorize(
 
     Rows whose `by` value is NaN are left unperturbed (treated as outside
     any group) rather than turned into NaN.
+
+    unit_id, share
+        Accepted for signature consistency with `protect(unit_id=...)`.
+        `winsorize` is a deterministic function of each value (there is
+        nothing to draw per unit), so `unit_id` is inert (warns rather than
+        raising, since it's routinely auto-injected by `protect()`); a
+        non-default `share` (!= 1.0) is rejected outright, like `coarsen`/
+        `year`/`month`, rather than silently having no effect.
     """
+    _reject_inert_share(share, "winsorize")
+    _warn_inert_unit_id(unit_id, "winsorize")
     columns = _validate_columns(data, columns)
     out = data.copy()
     lo_arg, hi_arg = limits
@@ -622,7 +717,15 @@ def bin(
     ---------
     If set, sparse bins (count < min_count) are merged into the smaller of
     their adjacent neighbors until all bins meet the threshold.
+
+    unit_id, share
+        Accepted for signature consistency with `protect(unit_id=...)`; see
+        `winsorize`'s docstring for the rationale — `bin` is deterministic
+        per value, so `unit_id` is inert (warns) and non-default `share` is
+        rejected.
     """
+    _reject_inert_share(share, "bin")
+    _warn_inert_unit_id(unit_id, "bin")
     columns = _validate_columns(data, columns)
     out = data.copy()
 
@@ -643,7 +746,29 @@ def bin(
             cat = _merge_sparse_bins(cat, min_count)
 
         if labels == "range":
-            out[col] = cat.astype(str)
+            # Build the documented "lo-hi" labels from interval edges
+            # ourselves — `cat.astype(str)` produces pandas' own repr
+            # ("(0.999, 2.5]") instead, and (being a plain str cast) also
+            # turns missing values into the literal string 'nan' rather
+            # than leaving them as real, still-missing NaN.
+            categories = getattr(cat, "cat", cat).categories
+            # `include_lowest=True` nudges the LOWEST interval's left bound
+            # a hair below the requested edge (e.g. -0.001) so a
+            # right-closed interval can still capture the exact minimum
+            # value — an implementation detail of pd.cut, not a real bin
+            # boundary. `categories` is always in ascending order, so the
+            # first entry is that nudged interval; display the originally
+            # requested lower edge for it instead.
+            true_min = float(np.min(edges))
+            lowest_iv = categories[0] if len(categories) else None
+            mapping = {
+                iv: f"{_fmt_bin_edge(true_min if iv == lowest_iv else iv.left)}"
+                    f"-{_fmt_bin_edge(iv.right)}"
+                for iv in categories
+            }
+            # na_action='ignore': NaN (missing input) must stay NaN, not be
+            # looked up in `mapping` (where it isn't a key anyway).
+            out[col] = cat.map(mapping, na_action="ignore")
         elif labels == "midpoint":
             mids = {iv: (iv.left + iv.right) / 2 for iv in cat.cat.categories}
             out[col] = cat.map(mids).astype(float)
@@ -654,6 +779,15 @@ def bin(
             out[col] = cat.map(mapping)
 
     return out
+
+
+def _fmt_bin_edge(x: float) -> str:
+    """Format a bin edge for the 'range' label: whole numbers print without
+    a trailing '.0' (so labels read "10-20", matching the docstring), other
+    values keep a compact decimal form."""
+    if float(x).is_integer():
+        return str(int(x))
+    return f"{x:g}"
 
 
 def _merge_sparse_bins(cat, min_count: int):
@@ -936,6 +1070,40 @@ def _coarsen_date_period(s, base, n, mode):
 # ============================================================================
 
 
+def _to_int_maybe_nullable(s: pd.Series) -> pd.Series:
+    """Truncate a float Series toward zero and cast to int, preserving any
+    NaN as a per-row missing value instead of raising or corrupting the
+    whole column.
+
+    Uses plain `int64` (via `.astype(int)`) when there is no missing value
+    at all — matching the exact dtype callers got before NaN-handling was
+    added, so existing exact-dtype comparisons (`assert_series_equal`)
+    keep working. Only switches to nullable `Int64` (which can hold <NA>)
+    when the column actually contains a missing row.
+    """
+    truncated = np.trunc(s)
+    if truncated.isna().any():
+        return truncated.astype("Int64")
+    return truncated.astype(int)
+
+
+def _ym_to_date(year_series: pd.Series, month: int, na_mask: pd.Series) -> pd.Series:
+    """Build a day-1-of-`month` date from an already-NaN-filled integer year
+    series, then mask rows back to NaT wherever the original input (per
+    `na_mask`) was missing.
+
+    `year_series` must contain no NaN itself (the caller fills a
+    placeholder value first): building the date via string concatenation
+    can't parse a NaN-derived fragment like 'nan-01-01', so we sidestep
+    that by filling, building, and only then re-applying missingness
+    row-by-row via `na_mask` — instead of letting one NaT poison every
+    row's string (pandas would upcast the whole int column to float once
+    any NaN is present, and 2020 becomes '2020.0').
+    """
+    result = pd.to_datetime(year_series.astype(str) + f"-{month:02d}-01")
+    return result.mask(na_mask, other=pd.NaT)
+
+
 def year(
     data: pd.DataFrame,
     columns: str | Sequence[str],
@@ -950,24 +1118,36 @@ def year(
     Default returns integer year. `as_date=True` returns a date floored to
     January 1 of that year. `bin=N` produces N-year period labels like
     "1990-1994".
+
+    A missing (NaT) input propagates to a missing output on that row only —
+    other rows in the same column are computed normally, not corrupted by
+    the presence of the NaT (see `_year_month_na_safe_int`/date-string
+    helpers below).
     """
     _reject_inert_share(share, "year")
     columns = _validate_columns(data, columns)
     out = data.copy()
     for col in columns:
-        y = pd.to_datetime(out[col]).dt.year
+        dt = pd.to_datetime(out[col])
+        na_mask = dt.isna()
+        y = dt.dt.year
         if bin is None:
             if as_date:
-                out[col] = pd.to_datetime(y.astype(str) + "-01-01")
+                out[col] = _ym_to_date(y.fillna(1904).astype(int), 1, na_mask)
             else:
-                out[col] = y.astype(int)
+                # Nullable Int64 (not plain int64/`.astype(int)`) so a
+                # missing row becomes <NA> instead of raising
+                # IntCastingNaNError for the whole column.
+                out[col] = y.astype("Int64").mask(na_mask)
         else:
             floor = (y // bin) * bin
             ceil = floor + bin - 1
             if as_date:
-                out[col] = pd.to_datetime(floor.astype(str) + "-01-01")
+                out[col] = _ym_to_date(floor.fillna(1904).astype(int), 1, na_mask)
             else:
-                out[col] = floor.astype(str) + "-" + ceil.astype(str)
+                lbl = (floor.fillna(0).astype("Int64").astype(str) + "-" +
+                       ceil.fillna(0).astype("Int64").astype(str))
+                out[col] = lbl.mask(na_mask)
     return out
 
 
@@ -980,22 +1160,34 @@ def month(
     unit_id: str | None = None,
     share: float = 1.0,
 ) -> pd.DataFrame:
-    """Truncate dates to month resolution. `bin=3` groups into quarters."""
+    """Truncate dates to month resolution. `bin=3` groups into quarters.
+
+    A missing (NaT) input propagates to a missing output on that row only.
+    Previously, once ANY row was NaT, `y`/`m` upcast to float for the WHOLE
+    column and `.astype(str)` rendered every row as e.g. '2020.0-1.0' (and
+    the NaT rows as 'nan-nan') instead of leaving the valid rows correct.
+    """
     _reject_inert_share(share, "month")
     columns = _validate_columns(data, columns)
     out = data.copy()
     for col in columns:
         dt = pd.to_datetime(out[col])
+        na_mask = dt.isna()
         y = dt.dt.year
         m = dt.dt.month
         if bin is not None:
             m = ((m - 1) // bin) * bin + 1
+        # Fill missing rows with a placeholder BEFORE building strings, so
+        # valid rows keep clean int formatting ('2020', not '2020.0'); the
+        # placeholder rows are overwritten with real missingness afterward.
+        y_i = y.fillna(1904).astype("Int64").astype(str)
+        m_i = m.fillna(1).astype("Int64").astype(str).str.zfill(2)
         if as_date:
-            out[col] = pd.to_datetime(
-                y.astype(str) + "-" + m.astype(str).str.zfill(2) + "-01"
-            )
+            result = pd.to_datetime(y_i + "-" + m_i + "-01")
+            out[col] = result.mask(na_mask, other=pd.NaT)
         else:
-            out[col] = y.astype(str) + "-" + m.astype(str).str.zfill(2)
+            result = y_i + "-" + m_i
+            out[col] = result.mask(na_mask)
     return out
 
 
@@ -1063,21 +1255,42 @@ def diff(
             days = delta.dt.days
         else:
             days = pd.Series([delta.days] * len(out), index=out.index)
+        # `.dt.days` already yields NaN (not a crash) for a NaT row; the
+        # rest of this function must not let that NaN corrupt other rows.
 
         if unit == "days":
-            result = days.astype(int)
+            result_f = days.astype(float)
         elif unit == "months":
-            result = (days / 30.44).astype(int)
+            result_f = days / 30.44
         elif unit == "years":
-            result = (days / 365.25).astype(int)
+            result_f = days / 365.25
         else:
             raise ValueError(f"Unknown unit: {unit!r}")
+
+        # Previously `.astype(int)` here raised IntCastingNaNError as soon
+        # as any date in `col` was missing, for the WHOLE column — not just
+        # the missing row. `_to_int_maybe_nullable` truncates and keeps
+        # every valid row's integer value, turning only the missing row(s)
+        # into <NA>.
+        result = _to_int_maybe_nullable(result_f)
 
         if keep_order and unit_id is not None:
             for pid, grp in data.groupby(unit_id):
                 orig_order = dt.loc[grp.index].rank(method="first")
-                new_order = result.loc[grp.index].rank(method="first")
-                if not (orig_order.values == new_order.values).all():
+                # `.astype(float)` first: `Series.rank()` on nullable Int64
+                # doesn't treat pd.NA as missing the way it treats a plain
+                # float NaN (it ranks it as if it were a real value instead
+                # of excluding it per na_option='keep'), which would make a
+                # unit with a missing date look reordered even though
+                # nothing moved. Float NaN ranks correctly.
+                new_order = result.loc[grp.index].astype(float).rank(method="first")
+                # NaN ranks as NaN (na_option='keep' is the rank() default);
+                # NaN == NaN is False, so without this NaN-safe comparison a
+                # unit with even one NaT date would always look "reordered"
+                # and raise, even though nothing was actually reordered.
+                same = ((orig_order.values == new_order.values) |
+                        (pd.isna(orig_order.values) & pd.isna(new_order.values)))
+                if not same.all():
                     raise ValueError(
                         f"diff would reorder events within unit {pid!r}; "
                         f"keep_order=True"
@@ -1129,23 +1342,33 @@ def shorten(
         return s[:keep_n] if side == "left" else s[-keep_n:]
 
     for col in columns:
-        s = out[col].astype(str)
+        # Work on the raw column, not `.astype(str)` first: casting the
+        # whole column to str up front turns missing values into the
+        # literal string 'nan' *before* `_truncate`'s `pd.isna` guard ever
+        # runs, so that guard becomes dead code and missing codes get
+        # truncated like real data (e.g. 'nan' -> 'n' with keep=1). Let
+        # each value decide for itself via `_truncate`, which already
+        # stringifies non-missing values and passes missing ones through.
+        raw = out[col]
 
         if per_value:
             def _apply_rule(v):
+                if pd.isna(v):
+                    return v
+                vs = str(v)
                 for pattern, action in per_value.items():
-                    matches = (v == pattern or
-                               (pattern.endswith("*") and v.startswith(pattern[:-1])))
+                    matches = (vs == pattern or
+                               (pattern.endswith("*") and vs.startswith(pattern[:-1])))
                     if matches:
                         if action == "keep_full":
-                            return v
+                            return vs
                         if action.startswith("keep_"):
                             n = int(action.split("_")[1])
                             return _truncate(v, n)
                 return _truncate(v, keep)
-            s = s.map(_apply_rule)
+            s = raw.map(_apply_rule)
         else:
-            s = s.map(lambda v: _truncate(v, keep))
+            s = raw.map(lambda v: _truncate(v, keep))
 
         if min_count is not None:
             current_keep = keep
@@ -1221,7 +1444,13 @@ def collapse(
                 keep_set = set(props[props >= keep_prop].index)
             else:
                 return series
-            return series.where(series.isin(keep_set), other_label)
+            # `series.isin(keep_set)` is False for NaN (NaN is never "in"
+            # anything, and value_counts() already excludes it from
+            # keep_set), so without the explicit `| series.isna()` below
+            # missingness would silently get recoded to `other_label` —
+            # collapsing "we don't know" into a specific category and
+            # destroying the fact that it was missing.
+            return series.where(series.isin(keep_set) | series.isna(), other_label)
 
         if by is not None:
             by_notna = out[by].notna()
@@ -1332,6 +1561,22 @@ def insert(
 
     source='resample'           : draw real rows then optionally modify
     source='sample_per_column'  : draw each column independently (breaks correlations)
+
+    share : float in [0, 1], default 0.01
+        Fraction of decoy rows/units to add, relative to the real data. The
+        smallest default of the three share-bearing verbs (vs. `noise`/
+        `jitter`'s 1.0 and `swap`'s 0.05): decoys are fabricated records
+        that distort real aggregate statistics (counts, sums, means) the
+        more of them there are, so a low default limits that distortion;
+        this function also warns above share=0.05.
+
+    Decoy unit_id values are generated to blend into the format of the
+    real IDs (continuing a numeric range, or matching the observed
+    character set/length) rather than a fixed marker like 'DECOY000000' —
+    a constant prefix defeats the point of a decoy, since one filter
+    removes every one of them. The exact count of decoys added is only
+    surfaced via a `UserWarning` (this function still returns a plain
+    DataFrame); which specific rows/IDs are decoys is not disclosed.
     """
     if level not in ("row", "unit"):
         raise ValueError(f"level must be 'row' or 'unit', got {level!r}")
@@ -1347,23 +1592,90 @@ def insert(
         n_decoys = n if n is not None else int(round(len(data) * share))
         sample = _generate_decoys(data, n_decoys, source, rng, modify)
         if new_unit_ids and unit_id is not None and unit_id in sample.columns:
-            sample[unit_id] = [f"DECOY{i:06d}" for i in range(n_decoys)]
+            sample[unit_id] = _decoy_ids(data[unit_id], n_decoys, rng)
+        warnings.warn(
+            f"insert: added {n_decoys} decoy row(s) (not marked as such — "
+            f"see docstring)",
+            stacklevel=2,
+        )
         return pd.concat([data, sample], ignore_index=True)
 
     # level == "unit"
     n_units = data[unit_id].nunique()
     n_decoy_units = n if n is not None else int(round(n_units * share))
     row_counts = data.groupby(unit_id).size().values
+    decoy_ids = _decoy_ids(data[unit_id], n_decoy_units, rng)
     decoys = []
     for i in range(n_decoy_units):
         rc = int(rng.choice(row_counts))
         sample = _generate_decoys(data, rc, source, rng, modify)
-        new_id = f"DECOY{i:06d}"
-        sample[unit_id] = new_id
+        sample[unit_id] = decoy_ids[i]
         decoys.append(sample)
+    warnings.warn(
+        f"insert: added {n_decoy_units} decoy unit(s) (not marked as such "
+        f"— see docstring)",
+        stacklevel=2,
+    )
     if decoys:
         return pd.concat([data] + decoys, ignore_index=True)
     return data.copy()
+
+
+def _decoy_ids(real_ids: pd.Series, n: int, rng: np.random.Generator) -> list:
+    """Generate `n` new IDs that blend into the format of `real_ids`,
+    instead of an obviously-filterable fixed marker like 'DECOY000000'.
+
+    If every real ID is <non-digit prefix><zero-padded number> and shares
+    one common prefix (e.g. 'PT0001', 'PT0002', ...), decoys continue the
+    numeric range past the observed max, zero-padded to at least the
+    widest existing width. Otherwise, decoys are random strings drawn from
+    the character set and length distribution actually observed in
+    `real_ids`, resampled on any collision so they can never coincide with
+    (or be distinguished on sight from) a real ID.
+    """
+    ids = [str(x) for x in real_ids]
+    matches = [_DECOY_ID_PATTERN.match(s) for s in ids]
+    if ids and all(matches):
+        prefixes = {m.group("prefix") for m in matches}
+        if len(prefixes) == 1:
+            prefix = next(iter(prefixes))
+            nums = [int(m.group("num")) for m in matches]
+            width = max(len(m.group("num")) for m in matches)
+            start = max(nums) + 1
+            return [
+                f"{prefix}{(start + i):0{max(width, len(str(start + i)))}d}"
+                for i in range(n)
+            ]
+
+    # Fallback: random strings matching the observed length/character-set,
+    # resampled on collision.
+    charset = sorted(set("".join(ids))) or list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    lengths = [len(s) for s in ids] or [8]
+    seen = set(ids)
+    out: list = []
+    attempts = 0
+    max_attempts = n * 200 + 1000
+    while len(out) < n and attempts < max_attempts:
+        length = int(rng.choice(lengths))
+        candidate = "".join(rng.choice(charset, size=length))
+        attempts += 1
+        if candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    extra_len = max(lengths) + 1 if lengths else 8
+    while len(out) < n:
+        # Character space exhausted at the observed length (tiny real ID
+        # space) — extend the length rather than give up or fall back to a
+        # fixed marker.
+        candidate = "".join(rng.choice(charset, size=extra_len)) + str(len(out))
+        extra_len += 1
+        if candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+_DECOY_ID_PATTERN = re.compile(r"^(?P<prefix>\D*)(?P<num>\d+)$")
 
 
 def _generate_decoys(
@@ -1494,12 +1806,27 @@ def swap(
     rows, so the exchange is always exact (no truncation/padding). If a unit
     has no same-row-count partner available it is left unswapped.
 
+    share : float in [0, 1], default 0.05
+        Fraction of rows/units to swap for method='rank'/'random'. Lower
+        than `noise`/`jitter`'s default of 1.0 because swapping is a much
+        more disruptive per-record edit (an entire value trades places with
+        another record's) — swapping every row by default would scramble
+        far more than needed for k-anonymity-style protection; contrast
+        with `insert` (default 0.01, distortion-driven for a different
+        reason — see its docstring). Ignored (and rejected if given a
+        non-default value) for method='shuffle'/'pram', which always
+        permute/recode every value in `columns` — there's no notion of a
+        partial share for those.
+
     Raises
     ------
     ValueError
         If share > 0 but the requested swap changed nothing (see
         `_assert_perturbed`) — e.g. every unit has a unique row count under
-        level='unit', or n < 2 under level='row'.
+        level='unit', or n < 2 under level='row'. Also raised if `share` is
+        given a non-default value together with method='shuffle'/'pram',
+        since those methods always act on 100% of values and a partial
+        share would be silently ignored otherwise.
     """
     columns = _validate_columns(data, columns)
     if level == "unit" and unit_id is None:
@@ -1509,6 +1836,7 @@ def swap(
     out = data.copy()
 
     if method == "shuffle":
+        _reject_inert_share(share, "swap(method='shuffle')", default=0.05)
         for col in columns:
             if by is None:
                 perm = rng.permutation(len(out))
@@ -1520,6 +1848,7 @@ def swap(
         return out
 
     if method == "pram":
+        _reject_inert_share(share, "swap(method='pram')", default=0.05)
         if transition is None:
             raise ValueError("method='pram' requires transition matrix dict")
         for col in columns:
@@ -1923,8 +2252,9 @@ class RiskReport:
 
 def risk(
     data: pd.DataFrame,
+    columns: str | Sequence[str] | None = None,
     *,
-    quasi_ids: Sequence[str],
+    quasi_ids: Sequence[str] | None = None,
     sensitive: Sequence[str] | None = None,
     unit_id: str | None = None,
 ) -> RiskReport:
@@ -1933,33 +2263,69 @@ def risk(
     Returns a RiskReport with k-anonymity, l-diversity (if `sensitive` given),
     uniqueness counts, and heuristic suggestions.
 
+    Parameters
+    ----------
+    columns : str | list of str | None
+        Positional alias for `quasi_ids` — e.g. `risk(df, ["sex", "zip"])`,
+        or even `risk(df, VAR1, VAR2)`-style callers that only have a bare
+        list of variable names (no dict/kwargs) can pass them here instead
+        of building `quasi_ids=[...]` themselves. Mutually exclusive with
+        `quasi_ids`; at least one of the two is required.
+    quasi_ids : list of str | None
+        Keyword form of the same thing.
+
     A record with a missing (NaN) value on one or more quasi-IDs is still a
     real record: it forms its own equivalence class(es) with other NaN
     records rather than being dropped from the count (dropping it would
     understate risk — an all-NaN group of 1 is exactly as unique as any
     other singleton).
 
+    When `unit_id` is given, l-diversity/t-closeness are computed on the
+    SAME one-row-per-unit projection as k-anonymity (first `sensitive`
+    value per unit), not on raw rows — otherwise k describes units while
+    l/t describe visits/events, mixing denominators within one report.
+
     Raises
     ------
     ValueError
-        If `data` has 0 rows — there is nothing to assess.
+        If `data` has 0 rows (nothing to assess), or if quasi-identifiers
+        are missing, or given both positionally and via `quasi_ids`.
     """
     if len(data) == 0:
         raise ValueError(
             "risk(): empty dataframe — cannot compute disclosure risk on 0 rows"
         )
 
+    if columns is not None:
+        if quasi_ids is not None:
+            raise ValueError(
+                "risk(): pass quasi-identifiers either positionally "
+                "(risk(df, columns)) or via quasi_ids=[...], not both"
+            )
+        quasi_ids = [columns] if isinstance(columns, str) else list(columns)
+    if not quasi_ids:
+        raise ValueError(
+            "risk() requires quasi-identifiers: risk(df, ['a', 'b']) or "
+            "risk(df, quasi_ids=['a', 'b'])"
+        )
+
     quasi_ids = list(quasi_ids)
     sensitive = list(sensitive) if sensitive else None
+    sens_col = sensitive[0] if sensitive else None
 
-    # Per-unit projection: each unit counted once on its (assumed-invariant) quasi_ids.
+    # Per-unit projection: each unit counted once on its (assumed-invariant)
+    # quasi_ids AND (if given) the sensitive column — l-diversity/t-closeness
+    # must use the exact same one-row-per-unit population as k-anonymity, or
+    # the report mixes a unit-level k with a row/visit-level l/t.
     # dropna=False: a record with a missing quasi-ID is a real (and often
     # maximally risky) equivalence class, not an invisible one.
     if unit_id is not None:
-        proj = data.groupby(unit_id)[quasi_ids].first().reset_index()
-        eq_classes = proj.groupby(quasi_ids, dropna=False).size()
+        proj_cols = quasi_ids + ([sens_col] if sens_col else [])
+        base_df = data.groupby(unit_id)[proj_cols].first().reset_index()
     else:
-        eq_classes = data.groupby(quasi_ids, dropna=False).size()
+        base_df = data
+
+    eq_classes = base_df.groupby(quasi_ids, dropna=False).size()
 
     k_min = int(eq_classes.min())
     k_median = float(eq_classes.median())
@@ -1970,23 +2336,22 @@ def risk(
 
     l_min = l_median = None
     t_max = None
-    if sensitive:
-        sens_col = sensitive[0]
+    if sens_col:
         # Global fordeling for t-closeness (total-variasjonsavstand per gruppe).
-        global_probs = data[sens_col].value_counts(normalize=True)
+        global_probs = base_df[sens_col].value_counts(normalize=True)
         l_vals = []
         t_vals = []
         # iterate over equivalence classes; build mask from quasi_id tuple
         for keys, _ in eq_classes.items():
             if not isinstance(keys, tuple):
                 keys = (keys,)
-            mask = np.ones(len(data), dtype=bool)
+            mask = np.ones(len(base_df), dtype=bool)
             for c, v in zip(quasi_ids, keys):
                 if pd.isna(v):
-                    mask &= data[c].isna().values
+                    mask &= base_df[c].isna().values
                 else:
-                    mask &= (data[c] == v).values
-            sub = data.loc[mask, sens_col]
+                    mask &= (base_df[c] == v).values
+            sub = base_df.loc[mask, sens_col]
             if len(sub) == 0:
                 continue
             sub_probs = sub.value_counts(normalize=True)
@@ -2092,12 +2457,35 @@ def protect(
                     if "unit_id" in sig.parameters:
                         params["unit_id"] = unit_id
 
+            key_discarded_note = None
             if verb_name in _verb_registry:
                 fn = _verb_registry[verb_name]
                 if verb_name == "pseudonymize":
                     result = fn(out, col, **params)
                     if isinstance(result, tuple):
                         out, _key = result
+                        # `protect()` only returns the transformed data +
+                        # TransformLog, not per-verb keys — so the
+                        # pseudonymization mapping `_key` is discarded here.
+                        # For method='random' (the default) that mapping is
+                        # the ONLY way back to the original values; once
+                        # it's gone the pseudonymization is irreversible.
+                        # Silently dropping it would let a caller believe
+                        # they could still re-identify later. Say so loudly
+                        # in the log instead of changing what protect()
+                        # returns (audit trail, not a new return shape).
+                        pseudo_method = params.get("method", "random")
+                        key_discarded_note = (
+                            f"pseudonymize key for column {col!r} "
+                            f"(method={pseudo_method!r}) was discarded by "
+                            f"protect() and is NOT recoverable from this "
+                            f"call" +
+                            (" — method='random' has no other way to "
+                             "regenerate it; call pseudonymize() directly "
+                             "and keep return_key=True's key if you need "
+                             "to reverse this later."
+                             if pseudo_method == "random" else ".")
+                        )
                     else:
                         out = result
                 else:
@@ -2113,6 +2501,7 @@ def protect(
                 params={k: v for k, v in params.items() if k != "unit_id"},
                 rows_affected=len(out),
                 units_affected=out[unit_id].nunique() if unit_id and unit_id in out.columns else None,
+                notes=key_discarded_note,
             )
 
     if audit:
@@ -2158,10 +2547,33 @@ def _profile_safe_harbor(
     zip_col: str | None = None,
     id_cols: Sequence[str] = (),
     age_col: str | None = None,
-    zip_population_threshold: int = 20_000,
+    zip_population: dict | None = None,
+    zip_min_count: int = 20_000,
     random_state: int | None = None,
 ):
-    """HIPAA Safe Harbor (§164.514(b)(2))."""
+    """HIPAA Safe Harbor (Sec 164.514(b)(2)).
+
+    ZIP handling
+    ------------
+    Safe Harbor's ZIP rule is about Census POPULATION: the first 3 digits
+    of a ZIP code may be released as-is only if the 3-digit area's Census
+    population is > 20,000 (per the Bureau's published Safe-Harbor ZCTA
+    list); all others (and all ZIPs with population <= 20,000) are
+    suppressed to '000'. That population figure is NOT something this
+    function can know from your dataset alone — a dataset's own row/person
+    count for a ZIP3 has nothing to do with how many people live there.
+
+    - Pass `zip_population={'003': 25000, ...}` (a real ZIP3 -> Census
+      population mapping, e.g. from the Bureau's Safe-Harbor list) to apply
+      the actual population>=20,000 rule; the log will say so.
+    - Leave `zip_population=None` (default) and this function instead
+      falls back to a heuristic that suppresses ZIP3s whose SAMPLE count in
+      THIS dataset is below `zip_min_count` (still named/defaulted 20,000,
+      but now honestly documented as a heuristic). This is NOT by itself
+      proof of Sec 164.514(b)(2) compliance — a ZIP3 can be common in your
+      sample yet have a small Census population, or vice versa — the log
+      entry says so explicitly rather than claiming "HIPAA".
+    """
     out = data.copy()
     log = TransformLog()
 
@@ -2170,7 +2582,12 @@ def _profile_safe_harbor(
             out, _key = pseudonymize(out, col, method="random", random_state=random_state)
             log.add(function="pseudonymize", columns=[col],
                     params={"method": "random"}, rows_affected=len(out),
-                    notes="HIPAA Safe Harbor identifier removal")
+                    notes="HIPAA Safe Harbor identifier removal; the "
+                          "pseudonymization key was discarded here (not "
+                          "returned by this profile) — method='random' "
+                          "means this is irreversible. Call "
+                          "pseudonymize() directly and keep its key if "
+                          "you need to re-identify later.")
 
     for col in date_cols:
         if col in out.columns:
@@ -2181,13 +2598,29 @@ def _profile_safe_harbor(
 
     if zip_col and zip_col in out.columns:
         out = shorten(out, zip_col, keep=3)
-        zip3_counts = out[zip_col].value_counts()
-        below = zip3_counts[zip3_counts < zip_population_threshold].index
-        out.loc[out[zip_col].isin(below), zip_col] = "***"
-        log.add(function="shorten", columns=[zip_col],
-                params={"keep": 3, "pop_threshold": zip_population_threshold},
-                rows_affected=len(out),
-                notes=f"HIPAA: ZIP3 with pop >= {zip_population_threshold}")
+        if zip_population is not None:
+            below = [z for z in out[zip_col].unique()
+                     if pd.notna(z) and zip_population.get(z, 0) < 20_000]
+            out.loc[out[zip_col].isin(below), zip_col] = "***"
+            log.add(function="shorten", columns=[zip_col],
+                    params={"keep": 3, "zip_population_rule": True},
+                    rows_affected=len(out),
+                    notes="HIPAA Sec 164.514(b)(2): ZIP3 suppressed unless "
+                          "its Census population (per the zip_population "
+                          "mapping you supplied) is >= 20,000")
+        else:
+            zip3_counts = out[zip_col].value_counts()
+            below = zip3_counts[zip3_counts < zip_min_count].index
+            out.loc[out[zip_col].isin(below), zip_col] = "***"
+            log.add(function="shorten", columns=[zip_col],
+                    params={"keep": 3, "zip_min_count": zip_min_count},
+                    rows_affected=len(out),
+                    notes=f"HEURISTIC, NOT the HIPAA population rule: ZIP3 "
+                          f"suppressed unless it has >= {zip_min_count} "
+                          f"rows in THIS dataset. True Sec 164.514(b)(2) "
+                          f"compliance requires Census population data — "
+                          f"pass zip_population={{'003': <population>, ...}} "
+                          f"to apply the actual rule.")
 
     if age_col and age_col in out.columns:
         out = winsorize(out, age_col, limits=(None, 90), method="value")
@@ -2260,8 +2693,14 @@ def _profile_health_research(
     quasi_ids: Sequence[str] = (),
     sensitive_cols: Sequence[str] = (),
     k: int = 5,
+    max_iterations: int = 20,
 ):
-    """Composed defaults for typical health-research release."""
+    """Composed defaults for typical health-research release: collapse rare
+    `sensitive_cols` categories, then — if `quasi_ids` is given — generalize
+    them (via the same greedy k-anonymization `profile('k_anonymize')`
+    uses) so the release actually reaches k-anonymity on those columns
+    rather than accepting `quasi_ids` and silently doing nothing with it.
+    """
     out = data.copy()
     log = TransformLog()
 
@@ -2270,6 +2709,14 @@ def _profile_health_research(
             out = collapse(out, col, rare_below=k)
             log.add(function="collapse", columns=[col],
                     params={"rare_below": k}, rows_affected=len(out))
+
+    if quasi_ids:
+        out, sub_log = _profile_k_anonymize(
+            out, quasi_ids=list(quasi_ids), k=k, unit_id=unit_id,
+            max_iterations=max_iterations,
+        )
+        log.entries.extend(sub_log.entries)
+
     return out, log
 
 

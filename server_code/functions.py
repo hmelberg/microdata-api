@@ -15,15 +15,6 @@ import pandas as pd
 from scipy import stats as scipy_stats
 from scipy.special import comb as scipy_comb, gammaln
 
-# --- Hjelpefunksjon: elementvis for skalar og Series ---
-def _elementwise(fn):
-    """Wrapper: fn(x) virker på både skalar og Series."""
-    def wrapped(x, *args, **kwargs):
-        if isinstance(x, pd.Series):
-            return x.apply(lambda v: fn(v, *args, **kwargs) if pd.notna(v) else np.nan)
-        return fn(x, *args, **kwargs) if (x is None or (isinstance(x, float) and np.isnan(x)) is False) else np.nan
-    return wrapped
-
 def _safe(fn):
     """Wrapper: returner NaN ved exception."""
     def wrapped(*args, **kwargs):
@@ -350,7 +341,8 @@ def rowconcat(*cols):
         else:
             # Broadcast skalar til Series
             s = pd.Series([c] * len(first_series), index=first_series.index)
-        series_cols.append(s.astype(str).fillna(''))
+        # Missing -> '' (B9: astype(str) FØR fillna bakte inn literal 'nan')
+        series_cols.append(s.map(lambda v: '' if pd.isna(v) else str(v)))
     df = pd.concat(series_cols, axis=1)
     return df.agg(''.join, axis=1)
 

@@ -148,7 +148,18 @@ class PandasProtect:
             long = masked.stack(dropna=False).rename("n").reset_index()
             merged = out.drop(columns=["n"]).merge(long, on=keys, how="left")
             return merged[list(out.columns)]
-        except Exception:
+        except Exception as exc:
+            # Same class of gap as _suppress_model's 2026-07-07 fix below:
+            # the bare except silently returned the primary-only table, making
+            # a genuine failure of the secondary pass (pivot on duplicate keys,
+            # protect API drift, ...) indistinguishable from the documented
+            # "not a two-way frame" no-op. Keep the fallback, but make the
+            # unexpected case OBSERVABLE in logs.
+            try:
+                print(f"[m2py_protection] _secondary_two_way fell back to "
+                      f"primary-only table: {exc!r}")
+            except Exception:
+                pass
             return out
 
     def _suppress_model(self, result, spec):
