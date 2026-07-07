@@ -161,6 +161,13 @@ if _ANVIL:
         row = app_tables.sources.get(source_id=sid)
         if row is None or row["status"] == "deleted":
             return None, False
+        import source_access
+        import source_registry
+        if source_access.caller_allowed(source_registry._row_to_source(row), email):
+            # already allowed (owner, listed, or an open audience) — queuing a
+            # request here would be a silent no-op for the owner to "approve"
+            # and would spam a notification for access the caller already has.
+            return row, False
         pending, added = add_pending(_cell(row, "pending_requests") or [], email)
         if added:
             row["pending_requests"] = pending   # auto-creates the column on first use
@@ -193,16 +200,21 @@ if _ANVIL:
         _add_pending_request above): re-fetches the row inside the
         transaction so this can't clobber — or be clobbered by — a
         concurrent /access_request or a second /decide call landing between
-        this call's read and write. Returns the row on success, None if
-        unknown/not-owner (caller maps that to the 404)."""
+        this call's read and write. Returns (row, error) — error is None on
+        success, else "unknown" (bad source_id/not owner) or "not_pending"
+        (email was never actually requested — approve/deny only acts on a
+        real pending entry, so this can't be used to grant an arbitrary
+        email with no record it was ever requested)."""
         row = app_tables.sources.get(source_id=sid)
         if row is None or (_cell(row, "owner_email") or "") != owner_email:
-            return None
+            return None, "unknown"
         pending = _cell(row, "pending_requests") or []
+        if not already_pending(pending, email):
+            return None, "not_pending"
         row["pending_requests"] = resolve_pending(pending, email)
         if decision == "approve":
             row["access_policy"] = grant_email(_cell(row, "access_policy"), email)
-        return row
+        return row, None
 
     @anvil.server.http_endpoint("/access_request/decide", methods=["POST"],
                                 cross_site_session=False, enable_cors=True)
@@ -222,8 +234,10 @@ if _ANVIL:
         decision = (body.get("decision") or "").strip()
         if decision not in ("approve", "deny"):
             return _json({"error": "decision må være approve eller deny"}, status=400)
-        row = _apply_decision(sid, user["email"], email, decision)
-        if row is None:
+        row, error = _apply_decision(sid, user["email"], email, decision)
+        if error == "unknown":
             return _json({"error": f"ukjent kilde: {sid}"}, status=404)
+        if error == "not_pending":
+            return _json({"error": f"{email} har ingen ventende forespørsel for {sid}"}, status=400)
         _audit(user["email"], "access_request_" + decision, f"{sid}:{email}")
         return _json({"ok": True})

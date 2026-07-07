@@ -95,12 +95,28 @@ def http_auth_email_request():
     if ip and not utils.check_rate_limit(f"authreq_ip:{ip}", max_calls=30, window_sec=3600):
         return _json({"error": "too many requests"}, status=429)
 
+    # Issuance (a table write) and sending are split (2026-07-07 fix): the old
+    # single try/except swallowed BOTH, so if issue_magic_code itself failed
+    # (e.g. a Data Tables write error), the response was still {"ok": true}
+    # with no code ever created — indistinguishable from "check your spam
+    # folder" when the backend was actually broken. A 500 here doesn't leak
+    # per-email info (unlike the invalid-email check above): it's the same
+    # response regardless of whether the email is valid/registered/whitelisted.
     try:
         code = auth.issue_magic_code(email)
+    except Exception as exc:
+        try:
+            print(f"[auth/email/request] issue_magic_code failed for {email}: {exc!r}")
+        except Exception:
+            pass
+        return _json({"error": "server error"}, status=500)
+
+    try:
         auth.send_magic_link_email(email, code, lang=lang)
     except Exception as exc:
-        # Log but don't reveal cause to caller (could be email-quota,
-        # Anvil downtime, etc.)
+        # Best-effort: the code IS issued and valid regardless of send
+        # failure (Anvil's per-day send quota, transient downtime, etc.) —
+        # log but don't reveal cause to caller.
         try:
             print(f"[auth/email/request] send failed for {email}: {exc!r}")
         except Exception:
