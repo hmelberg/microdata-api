@@ -195,7 +195,16 @@ def length(x):
 
 def string(x):
     if isinstance(x, pd.Series):
-        return x.astype(str)
+        # Missing skal forbli missing (som i microdata.no) — astype(str) gir
+        # ellers literalen 'nan', som gjør sysmiss ubrukelig og velter
+        # destring uten force (jf. manualens overlevelsesanalyse-eksempel).
+        out = x.astype(str)
+        na = x.isna()
+        if na.any():
+            out = out.mask(na)
+        return out
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return x
     return str(x)
 
 def lower(x):

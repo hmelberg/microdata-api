@@ -25,7 +25,7 @@ import threading
 import numpy as np
 import pandas as pd
 
-from m2py import _py_eval_expr, _py_eval_cond, AGG_STAT_ALIAS
+from m2py import _py_eval_expr, _py_eval_cond, AGG_STAT_ALIAS, _percent_of_total_fn
 from .sources import read_source  # noqa: F401  (used by generated code: ops.read_source)
 
 
@@ -214,7 +214,11 @@ def collapse(df, targets, by=None):
         by = by.strip().split()[0]
     agg_dict = {}
     for t in targets:
-        stat_fn = AGG_STAT_ALIAS.get(t["stat"], t["stat"])
+        if t["stat"] == "percent":
+            # B7: andel av totalen (som i StatsEngine), ikke andel innen gruppen
+            stat_fn = _percent_of_total_fn(df[t["src"]])
+        else:
+            stat_fn = AGG_STAT_ALIAS.get(t["stat"], t["stat"])
         target_col = t["target"] or t["src"]
         agg_dict[target_col] = (t["src"], stat_fn)
     if not by:
@@ -231,7 +235,11 @@ def aggregate(df, targets, by=None):
     transform)."""
     out = df.copy()
     for t in targets:
-        stat_fn = AGG_STAT_ALIAS.get(t["stat"], t["stat"])
+        if t["stat"] == "percent":
+            # B7: andel av totalen (som i StatsEngine), ikke andel innen gruppen
+            stat_fn = _percent_of_total_fn(out[t["src"]])
+        else:
+            stat_fn = AGG_STAT_ALIAS.get(t["stat"], t["stat"])
         new_var = t["target"] or t["src"]
         out[new_var] = out.groupby(by)[t["src"]].transform(stat_fn)
     return out

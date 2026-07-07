@@ -239,6 +239,34 @@ def _check_unit_invariant(
             )
 
 
+def _assert_perturbed(
+    before: pd.DataFrame,
+    after: pd.DataFrame,
+    columns: Sequence[str],
+    verb: str,
+) -> None:
+    """Raise if a perturbation verb changed nothing on `columns`.
+
+    Several verbs (swap, noise, ...) can silently degenerate into a no-op on
+    small datasets or unlucky parameter choices (e.g. `share` rounding to 0
+    pairs) while still logging success. That overstates protection: the
+    caller believes the data was perturbed when it is bit-for-bit identical.
+    Call this after the verb has done its work; it treats NaN==NaN as
+    "unchanged" so it doesn't flag columns that were already missing.
+    """
+    for col in columns:
+        b = before[col].values
+        a = after[col].values
+        same = (b == a) | (pd.isna(b) & pd.isna(a))
+        if not np.all(same):
+            return
+    raise ValueError(
+        f"{verb}: no values were changed in {list(columns)} (0 of {len(before)} "
+        f"rows differ). The requested perturbation had no effect — check "
+        f"share/scale/k parameters; data was NOT protected."
+    )
+
+
 # ============================================================================
 # Value-level verbs
 # ============================================================================
@@ -278,7 +306,8 @@ def noise(
         Post-noise clipping.
     by : str | None
         Grouping for method='group_mean' (sort within group before grouping
-        into k-tuples).
+        into k-tuples). Rows whose `by` value is NaN are left unperturbed
+        (treated as outside any group) rather than turned into NaN.
     unit_id : str | None
         When set, noise is drawn once per unit and broadcast.
     random_state : int | Generator | None
@@ -287,13 +316,33 @@ def noise(
     -------
     DataFrame
         Copy of `data` with perturbed columns.
+
+    Raises
+    ------
+    ValueError
+        If method='group_mean' and scale is not an integer >= 2 (scale means
+        group size k for this method, not a standard deviation), or if the
+        requested perturbation changed nothing (share > 0 but 0 values
+        differ from the input — see `_assert_perturbed`).
     """
     rng = _resolve_random_state(random_state)
     columns = _validate_columns(data, columns)
     out = data.copy()
 
     if method == "group_mean":
-        k = 3 if scale == "auto" else int(scale)
+        if scale == "auto":
+            k = 3
+        else:
+            k_float = float(scale)
+            if k_float < 2 or not k_float.is_integer():
+                raise ValueError(
+                    f"noise(method='group_mean'): scale means the group size "
+                    f"k (number of records averaged together per group), and "
+                    f"must be an integer >= 2; got scale={scale!r}. For "
+                    f"SD-scaled noise use method='gaussian' (or another "
+                    f"non-group method) instead."
+                )
+            k = int(k_float)
         for col in columns:
             out[col] = _noise_group_mean(out, col, k, by=by)
         return out
@@ -334,6 +383,7 @@ def noise(
 
         out[col] = new
 
+    _assert_perturbed(data, out, columns, "noise")
     return out
 
 
@@ -370,6 +420,9 @@ def _draw_noise(rng: np.random.Generator, method: str, scale: float, n: int) -> 
 def _noise_group_mean(data: pd.DataFrame, col: str, k: int, by: str | None) -> pd.Series:
     """Microaggregation: sort within `by` (or globally), group into k-tuples,
     replace each value with group mean. Returns Series aligned to data.index.
+
+    Rows whose `by` value is NaN are left unperturbed (treated as outside any
+    group) instead of coming back as NaN in `col`.
     """
     if k < 2:
         return data[col]
@@ -384,7 +437,11 @@ def _noise_group_mean(data: pd.DataFrame, col: str, k: int, by: str | None) -> p
 
     if by is None:
         return _agg(data[col])
-    return data.groupby(by, group_keys=False)[col].apply(_agg)
+
+    by_notna = data[by].notna()
+    result = data[col].copy()
+    result.loc[by_notna] = data.loc[by_notna].groupby(by, group_keys=False)[col].apply(_agg)
+    return result
 
 
 def jitter(
@@ -488,6 +545,9 @@ def winsorize(
     gaussian   : limits are SD multipliers; cap at mean ± k·SD
     iqr        : limits are IQR multipliers; cap at Q1 - k·IQR and Q3 + k·IQR
     mad        : limits are MAD multipliers; cap at median ± k·MAD
+
+    Rows whose `by` value is NaN are left unperturbed (treated as outside
+    any group) rather than turned into NaN.
     """
     columns = _validate_columns(data, columns)
     out = data.copy()
@@ -524,7 +584,10 @@ def winsorize(
             def _grp(s):
                 lo, hi = _bounds(s)
                 return s.clip(lower=lo, upper=hi)
-            out[col] = out.groupby(by, group_keys=False)[col].apply(_grp)
+            by_notna = out[by].notna()
+            out.loc[by_notna, col] = out.loc[by_notna].groupby(
+                by, group_keys=False
+            )[col].apply(_grp)
 
     return out
 
@@ -1124,6 +1187,9 @@ def collapse(
     rare_below=N                 : values appearing < N times → other_label
     keep_top=N                   : keep N most common; rest → other_label
     keep_prop=p                  : keep values with proportion ≥ p; rest → other_label
+
+    Rows whose `by` value is NaN are left unperturbed (treated as outside
+    any group) rather than turned into NaN.
     """
     columns = _validate_columns(data, columns)
     modes = [mapping is not None, rare_below is not None,
@@ -1158,7 +1224,10 @@ def collapse(
             return series.where(series.isin(keep_set), other_label)
 
         if by is not None:
-            out[col] = out.groupby(by, group_keys=False)[col].apply(_apply_threshold)
+            by_notna = out[by].notna()
+            out.loc[by_notna, col] = out.loc[by_notna].groupby(
+                by, group_keys=False
+            )[col].apply(_apply_threshold)
         else:
             out[col] = _apply_threshold(s)
 
@@ -1417,6 +1486,20 @@ def swap(
 
     method describes HOW to match: rank | random | shuffle | pram
     level  describes WHAT is swapped: row | unit
+
+    level='unit' exchanges each matched pair's *entire* value sequence for
+    `columns` (not just one row broadcast to the whole unit): unit A's rows
+    get unit B's values and vice versa, matched positionally in row order.
+    Units are only ever paired with another unit that has the same number of
+    rows, so the exchange is always exact (no truncation/padding). If a unit
+    has no same-row-count partner available it is left unswapped.
+
+    Raises
+    ------
+    ValueError
+        If share > 0 but the requested swap changed nothing (see
+        `_assert_perturbed`) — e.g. every unit has a unique row count under
+        level='unit', or n < 2 under level='row'.
     """
     columns = _validate_columns(data, columns)
     if level == "unit" and unit_id is None:
@@ -1448,6 +1531,11 @@ def swap(
         for col in columns:
             n = len(out)
             n_swap = int(round(n * share))
+            if share > 0 and n >= 2:
+                # Guarantee at least one pair rather than silently rounding
+                # down to 0 (default share=0.05 on <30 rows swapped nothing
+                # while still logging success).
+                n_swap = max(2, n_swap)
             col_idx = out.columns.get_loc(col)
             if method == "rank":
                 # order[pos] = rad-indeks ved rang-posisjon pos.
@@ -1482,24 +1570,45 @@ def swap(
                     out.iloc[j, col_idx] = a
             else:
                 raise ValueError(f"Unknown method: {method!r}")
+        if share > 0:
+            _assert_perturbed(data, out, columns, "swap")
         return out
 
-    # level == "unit": swap whole records between matched units
+    # level == "unit": swap whole unit records between matched units.
+    # Only units with an equal number of rows are paired, so the exchange
+    # below is always a full, exact positional swap of both units' values.
     units = data[unit_id].unique()
     n_units = len(units)
+    row_counts = data.groupby(unit_id).size()
     n_swap_units = int(round(n_units * share))
+    if share > 0 and n_units >= 2:
+        n_swap_units = max(2, n_swap_units)
 
     if method == "random":
-        chosen = rng.choice(units, size=(n_swap_units // 2) * 2, replace=False)
-        pairs = chosen.reshape(-1, 2)
+        buckets: dict[int, list] = {}
+        for u in units:
+            buckets.setdefault(int(row_counts[u]), []).append(u)
+        pairs_list: list = []
+        budget = n_swap_units // 2
+        for bucket_units in buckets.values():
+            if budget <= 0:
+                break
+            bu = np.array(bucket_units, dtype=object)
+            rng.shuffle(bu)
+            n_pairs_here = min(len(bu) // 2, budget)
+            for k in range(n_pairs_here):
+                pairs_list.append((bu[2 * k], bu[2 * k + 1]))
+            budget -= n_pairs_here
+        pairs = pairs_list
     elif method == "rank":
-        # rank units by the first column's per-unit mean, swap within window
+        # rank units by the first column's per-unit mean, swap within window,
+        # restricted to partners with the same row count (see docstring).
         first_col = columns[0]
         unit_vals = data.groupby(unit_id)[first_col].mean().sort_values()
         ordered = list(unit_vals.index)
         window = max(1, int(n_units * swap_range_pct))
         used: set = set()
-        pairs_list: list = []
+        pairs_list = []
         for _ in range(n_swap_units // 2):
             available_positions = [k for k in range(n_units) if ordered[k] not in used]
             if not available_positions:
@@ -1508,26 +1617,31 @@ def swap(
             i = ordered[i_pos]
             j_candidates = [ordered[k]
                             for k in range(max(0, i_pos - window), min(n_units, i_pos + window + 1))
-                            if ordered[k] != i and ordered[k] not in used]
+                            if ordered[k] != i and ordered[k] not in used
+                            and row_counts[ordered[k]] == row_counts[i]]
             if not j_candidates:
                 continue
             j = j_candidates[int(rng.integers(0, len(j_candidates)))]
             pairs_list.append((i, j))
             used.add(i)
             used.add(j)
-        pairs = np.array(pairs_list) if pairs_list else np.empty((0, 2))
+        pairs = pairs_list
     else:
         raise ValueError(f"Unknown method for level='unit': {method!r}")
 
     for u1, u2 in pairs:
-        mask1 = out[unit_id] == u1
-        mask2 = out[unit_id] == u2
+        idx1 = out.index[out[unit_id] == u1]
+        idx2 = out.index[out[unit_id] == u2]
+        n_rows = min(len(idx1), len(idx2))
+        idx1, idx2 = idx1[:n_rows], idx2[:n_rows]
         for col in columns:
-            v1 = out.loc[mask1, col].iloc[0] if mask1.any() else None
-            v2 = out.loc[mask2, col].iloc[0] if mask2.any() else None
-            out.loc[mask1, col] = v2
-            out.loc[mask2, col] = v1
+            v1 = out.loc[idx1, col].to_numpy().copy()
+            v2 = out.loc[idx2, col].to_numpy().copy()
+            out.loc[idx1, col] = v2
+            out.loc[idx2, col] = v1
 
+    if share > 0:
+        _assert_perturbed(data, out, columns, "swap")
     return out
 
 
@@ -1633,13 +1747,18 @@ def _suppress_table(
 
     # fuzzy ranges
     if ranges is not None:
+        range_min = ranges[0][0]
+        range_max = ranges[-1][1]
+
         def _range_label(v):
             if pd.isna(v):
                 return v
             for lo, hi in ranges:
                 if lo <= v <= hi:
                     return f"{lo}-{hi}"
-            return f">{ranges[-1][1]}"
+            if v < range_min:
+                return f"<{range_min}"
+            return f">{range_max}"
         if isinstance(out, pd.Series):
             out = out.map(_range_label)
         else:
@@ -1765,7 +1884,7 @@ class RiskReport:
     """Disclosure-risk metrics for a set of quasi-identifiers."""
     k_min: int
     k_median: float
-    k_below_5: int
+    k_below_5: int  # RECORDS (not equivalence classes) in classes with k < 5
     units_at_risk: int
     l_min: float | None
     l_median: float | None
@@ -1813,20 +1932,39 @@ def risk(
 
     Returns a RiskReport with k-anonymity, l-diversity (if `sensitive` given),
     uniqueness counts, and heuristic suggestions.
+
+    A record with a missing (NaN) value on one or more quasi-IDs is still a
+    real record: it forms its own equivalence class(es) with other NaN
+    records rather than being dropped from the count (dropping it would
+    understate risk — an all-NaN group of 1 is exactly as unique as any
+    other singleton).
+
+    Raises
+    ------
+    ValueError
+        If `data` has 0 rows — there is nothing to assess.
     """
+    if len(data) == 0:
+        raise ValueError(
+            "risk(): empty dataframe — cannot compute disclosure risk on 0 rows"
+        )
+
     quasi_ids = list(quasi_ids)
     sensitive = list(sensitive) if sensitive else None
 
-    # Per-unit projection: each unit counted once on its (assumed-invariant) quasi_ids
+    # Per-unit projection: each unit counted once on its (assumed-invariant) quasi_ids.
+    # dropna=False: a record with a missing quasi-ID is a real (and often
+    # maximally risky) equivalence class, not an invisible one.
     if unit_id is not None:
         proj = data.groupby(unit_id)[quasi_ids].first().reset_index()
-        eq_classes = proj.groupby(quasi_ids).size()
+        eq_classes = proj.groupby(quasi_ids, dropna=False).size()
     else:
-        eq_classes = data.groupby(quasi_ids).size()
+        eq_classes = data.groupby(quasi_ids, dropna=False).size()
 
     k_min = int(eq_classes.min())
     k_median = float(eq_classes.median())
-    k_below_5 = int((eq_classes < 5).sum())
+    # Records (not equivalence classes) that fall in a class with k < 5.
+    k_below_5 = int(eq_classes[eq_classes < 5].sum())
     units_at_risk = int((eq_classes == 1).sum())
     distinct_combos = int(len(eq_classes))
 
@@ -1844,7 +1982,10 @@ def risk(
                 keys = (keys,)
             mask = np.ones(len(data), dtype=bool)
             for c, v in zip(quasi_ids, keys):
-                mask &= (data[c] == v).values
+                if pd.isna(v):
+                    mask &= data[c].isna().values
+                else:
+                    mask &= (data[c] == v).values
             sub = data.loc[mask, sens_col]
             if len(sub) == 0:
                 continue

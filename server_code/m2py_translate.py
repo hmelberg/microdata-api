@@ -529,35 +529,47 @@ def _emit_merge(args, opts, backend, var, known, tracker, active, source_path="d
     if isinstance(args, list) and "on" in args:
         i = args.index("on")
         on_var = args[i + 1] if i + 1 < len(args) else on_var
-    key, status = _old_syntax_key(tracker, active, name, on_var)
+    key, todo_msg = _old_syntax_key(tracker, active, name, on_var)
     if not key:
         return None
     load, other = _load_other(name, backend, known, source_path, tracker)
-    todo = ("# TODO: verify join key (could not resolve from catalog)\n"
-            if status != "ok" else "")
+    todo = (todo_msg + "\n") if todo_msg else ""
     call = f"{var} = ops.merge({var}, {other}, on={key!r}, how={how!r})"
     return "\n".join(load + [todo + call])
 
 
 def _old_syntax_key(tracker, active, other, on_var):
     """Resolve the (symmetric) key for old-syntax ``merge X``: explicit on, else
-    the entity key present in both, else a shared column. Returns (key, status)."""
+    the entity key present in both, else a shared column.
+
+    Returns ``(key, todo_comment)``: ``todo_comment`` is ``None`` when the key is
+    resolved with confidence, else a ``# TODO`` line (with no trailing newline)
+    to bake above the merge call flagging the guess for manual review."""
     if on_var:
-        return on_var, "ok"
+        return on_var, None
     ak = tracker._keys(active)
     if ak and all(c in tracker.ensure(other) for c in ak):
         # promote to the full composite key list when the manifest declares >1 key
-        return (ak if len(ak) > 1 else ak[0]), "ok"
+        return (ak if len(ak) > 1 else ak[0]), None
     acols = tracker.ensure(active)
     ocols = tracker.ensure(other)
     ek = key_col_from_cols(acols)
     if ek and ek in ocols:
-        return ek, "ok"
-    common = list(acols & ocols)
-    if common:
-        return common[0], "ok"
-    # nothing tracked in common: fall back to the person key, flag for review
-    return KeyTracker.DEFAULT_KEY, "error"
+        return ek, None
+    # Deterministic order (not set-iteration order, which is arbitrary/
+    # hash-dependent) so the same script always bakes the same key.
+    common = sorted(acols & ocols)
+    if not common:
+        # nothing tracked in common: fall back to the person key, flag for review
+        return KeyTracker.DEFAULT_KEY, "# TODO: verify join key (could not resolve from catalog)"
+    if len(common) > 1:
+        # More than one shared column: picking one is a guess even though it
+        # "worked" in the sense of returning a valid column name — flag it
+        # loudly instead of silently baking an arbitrary choice as "ok".
+        return common[0], (
+            f"# TODO: multiple shared columns ({', '.join(common)}) — verify join key"
+        )
+    return common[0], None
 
 
 def _frame_expr(base, cond):
@@ -759,7 +771,7 @@ def _expand_loops(script):
     lines = script.splitlines()
     out = []
 
-    def process(seq):
+    def process(seq, depth=0):
         i = 0
         while i < len(seq):
             sub = it._substitute_bindings(seq[i])
@@ -780,6 +792,21 @@ def _expand_loops(script):
                 i += 1
                 continue
             if cmd == "for" and isinstance(instr["args"], dict) and "levels" in instr["args"]:
+                if depth > 0:
+                    # The body-scan below locates the matching 'end' by walking
+                    # the top-level `lines` array, which is only valid when
+                    # `seq is lines` (the outermost call). A `for` found while
+                    # already inside another `for`'s body would silently pair
+                    # with the wrong 'end' and unroll scrambled/garbage code
+                    # (or recurse forever) — fail loudly instead. microdata
+                    # loops express multi-dimensional iteration via
+                    # semicolon-separated levels within a single `for`, not
+                    # via nested for-blocks, so this is always invalid input.
+                    raise ValueError(
+                        "m2py_translate: nested 'for' loops are not supported "
+                        f"({seq[i].strip()!r} appears inside another for-block); "
+                        "use semicolon-separated levels in a single 'for' instead"
+                    )
                 body, j = [], i + 1
                 while j < len(lines):
                     bj = parser.parse_line(lines[j].strip())
@@ -791,7 +818,7 @@ def _expand_loops(script):
 
                 def step(idx):
                     if idx >= len(levels):
-                        process(body)
+                        process(body, depth=depth + 1)
                         return
                     lvl = levels[idx]
                     vals = lvl["values"]

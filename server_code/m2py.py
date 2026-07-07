@@ -232,6 +232,7 @@ _M2PY_MESSAGES_EN = {
     'Person i trafikkulykke': 'Person in traffic accident',
     'Populasjonen er {n} enheter ({context}). microdata.no tillater ikke populasjoner med færre enn {min_pop} enheter.': 'The population is {n} units ({context}). microdata.no does not allow populations with fewer than {min_pop} units.',
     'Populasjonen er {n} enheter. microdata.no krever minst {min_pop} enheter for deskriptiv statistikk ({cmd}). Unntak: ren count/sum er tillatt.': 'The population is {n} units. microdata.no requires at least {min_pop} units for descriptive statistics ({cmd}). Exception: plain count/sum is allowed.',
+    'Gruppen {gval} i {gvar} har {n} enheter. microdata.no krever minst {min_pop} enheter for deskriptiv statistikk ({cmd}) — også per gruppe. Unntak: ren count/sum er tillatt.': 'Group {gval} in {gvar} has {n} units. microdata.no requires at least {min_pop} units for descriptive statistics ({cmd}) — per group as well. Exception: plain count/sum is allowed.',
     'Prosent': 'Percent',
     'PÅ': 'ON',
     'Slettet datasett: {name}': 'Deleted dataset: {name}',
@@ -616,18 +617,34 @@ class MicroParser:
         })
         options_dict = {}
         first_word = line.split(maxsplit=1)[0].lower() if line else ''
+        _deferred_condition = None
         if ',' in line and first_word not in _no_comma_option_split:
-            line, opt_part = line.split(',', 1)
-            # Finner opsjoner som 'robust' eller 'by(kommune)'
-            opt_matches = re.finditer(r"(?P<opt>\w+)(?:\((?P<arg>[^)]+)\))?", opt_part)
-            for m in opt_matches:
-                arg = m.group('arg')
-                options_dict[m.group('opt')] = arg.strip() if arg else True
+            # B6: bare et komma på TOPP-NIVÅ (utenfor parenteser/klammer/
+            # anførselstegn) skiller opsjoner fra kommandoen. Naiv split(',')
+            # rev `summarize x if inrange(alder, 30, 40)` i stykker ved
+            # kommaet INNE i inrange(...) → TokenError.
+            _cpos = self._scan_top_level(line, ',')
+            if _cpos is not None:
+                line, opt_part = line[:_cpos], line[_cpos + 1:]
+                # B6 (variant): `summarize x, gini if b == 1` — betingelsen
+                # står ETTER opsjons-kommaet. Før forsvant den stille inn i
+                # opsjons-regexen og kommandoen kjørte på hele populasjonen.
+                _if_pos = self._scan_top_level(opt_part, ' if ')
+                if _if_pos is not None:
+                    _deferred_condition = opt_part[_if_pos + 4:]
+                    opt_part = opt_part[:_if_pos]
+                # Finner opsjoner som 'robust' eller 'by(kommune)'
+                opt_matches = re.finditer(r"(?P<opt>\w+)(?:\((?P<arg>[^)]+)\))?", opt_part)
+                for m in opt_matches:
+                    arg = m.group('arg')
+                    options_dict[m.group('opt')] = arg.strip() if arg else True
 
         # 2. Skill ut 'if'-betingelse
         condition = None
         if ' if ' in line:
             line, condition = line.split(' if ', 1)
+        if condition is None and _deferred_condition:
+            condition = _deferred_condition
 
         # 3. Kommando og argumenter
         parts = line.split(maxsplit=1)
@@ -651,6 +668,32 @@ class MicroParser:
             "condition": condition.strip() if condition else None,
             "options": options_dict
         }
+
+    @staticmethod
+    def _scan_top_level(s, what):
+        """Posisjon av første forekomst av `what` på topp-nivå — utenfor
+        parenteser/klammer og anførselstegn. None hvis ingen. Brukes for å
+        skille opsjoner/if-betingelser uten å rive uttrykk som
+        inrange(alder, 30, 40) i stykker (B6)."""
+        paren = 0
+        quote = None
+        i = 0
+        n = len(s)
+        while i < n:
+            ch = s[i]
+            if quote:
+                if ch == quote and (i == 0 or s[i - 1] != '\\'):
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            elif ch in '([':
+                paren += 1
+            elif ch in ')]':
+                paren = max(0, paren - 1)
+            elif paren == 0 and s.startswith(what, i):
+                return i
+            i += 1
+        return None
 
     def _parse_scrub_args(self, inside):
         """Parse innholdet i scrub-VERB(...): posisjonelle variabler + key=value-kwargs."""
@@ -3373,14 +3416,49 @@ class MockDataEngine:
                 return pd.DataFrame(data)
             # Datovariabler: generer basert på data_type-format
             if data_type.startswith('date:yyyymmdd'):
-                # YYYYMMDD-format (f.eks. dødsdato, oppdateringsdato)
-                start_year = 1990
-                end_year = _DEMO_REF_YEAR
-                years = rng.integers(start_year, end_year + 1, size=n_rows)
-                months = rng.integers(1, 13, size=n_rows)
-                days = rng.integers(1, 29, size=n_rows)
-                yyyymmdd = years * 10000 + months * 100 + days
-                data[var_name] = yyyymmdd.astype(int)
+                if 'DOEDS_DATO' in (short_name or var_name or '').upper():
+                    # Dødsdato (BEFOLKNING_DOEDS_DATO o.l.): flertallet lever
+                    # (missing), et realistisk mindretall (~10 %) er dødt, og
+                    # dødsdato er ALDRI før fødsel (dødsår ≥ fødselsår + 1,
+                    # samme semantikk som mockdata_export.build_deceased_stock)
+                    # eller etter referanseåret. Den generiske uniforme
+                    # 1990-2025-trekningen ga 100 % døde og ~15 % død før fødsel.
+                    _d1 = parsed_args.get('date1') if parsed_args else None
+                    try:
+                        _ref_death_year = int(str(_d1)[:4]) if _d1 else int(_DEMO_REF_YEAR)
+                    except (ValueError, TypeError):
+                        _ref_death_year = int(_DEMO_REF_YEAR)
+                    if uids is not None and len(uids) == n_rows and n_rows > 0:
+                        # Samme deterministiske fødselsår per uid som
+                        # BEFOLKNING_FOEDSELS_AAR_MND-generatoren bruker.
+                        _birth_years = np.array(
+                            [_norway_demo_birth_year_from_uid(int(u)) for u in uids],
+                            dtype=np.int64)
+                    else:
+                        # Ingen fødselskobling: håndhev likevel missing-flertall
+                        # og ingen framtidsdatoer (nedre gulv 1900).
+                        _birth_years = np.full(n_rows, 1899, dtype=np.int64)
+                    _vals = np.full(n_rows, np.nan)
+                    _eligible = (_birth_years + 1) <= _ref_death_year
+                    _dead = (rng.random(n_rows) < 0.10) & _eligible
+                    _n_dead = int(_dead.sum())
+                    if _n_dead:
+                        _by = _birth_years[_dead]
+                        _span = _ref_death_year - (_by + 1) + 1
+                        _dyears = _by + 1 + np.floor(rng.random(_n_dead) * _span).astype(np.int64)
+                        _dmonths = rng.integers(1, 13, size=_n_dead)
+                        _ddays = rng.integers(1, 29, size=_n_dead)
+                        _vals[_dead] = (_dyears * 10000 + _dmonths * 100 + _ddays).astype(float)
+                    data[var_name] = _vals
+                else:
+                    # YYYYMMDD-format (f.eks. oppdateringsdato)
+                    start_year = 1990
+                    end_year = _DEMO_REF_YEAR
+                    years = rng.integers(start_year, end_year + 1, size=n_rows)
+                    months = rng.integers(1, 13, size=n_rows)
+                    days = rng.integers(1, 29, size=n_rows)
+                    yyyymmdd = years * 10000 + months * 100 + days
+                    data[var_name] = yyyymmdd.astype(int)
             elif data_type.startswith('date:yyyymm'):
                 # F.eks. fødselsår og -måned (BEFOLKNING_FOEDSELS_AAR_MND).
                 # Bruk referansedato fra import-kallet som øvre grense —
@@ -3607,12 +3685,26 @@ def calculate_iqr(x):
     if len(x) == 0: return None
     return float(x.quantile(0.75) - x.quantile(0.25))
 
+def _percent_of_total_fn(full_col):
+    """B7: agg-funksjon for (percent) — gruppens andel av TOTALEN av
+    ikke-missing observasjoner, slik at prosentene summerer til 100 over
+    gruppene. Totalen må bindes her: en agg-lambda ser bare gruppens rader,
+    så den kan ikke selv regne andel av totalen."""
+    total = int(full_col.notna().sum())
+    def _pct(x, _total=total):
+        return 100 * x.notna().sum() / _total if _total else np.nan
+    return _pct
+
 # Statistikk-alias for aggregate/collapse (microdata.no manual)
 AGG_STAT_ALIAS = {
     'median': lambda x: x.quantile(0.5),
     'semean': 'sem',
     'sebinomial': lambda x: np.sqrt(x.mean() * (1 - x.mean()) / x.count()) if x.count() > 0 else np.nan,
     'sd': 'std',
+    # NB (B7): denne lambdaen regner andel ikke-missing INNEN gruppen (~100
+    # per gruppe). aggregate/collapse i StatsEngine overstyrer den med
+    # _percent_of_total_fn (andel av totalen); aliaset står igjen som
+    # fallback for eksterne brukere (m2py_runtime.pandas_ops).
     'percent': lambda x: 100 * x.notna().sum() / len(x) if len(x) > 0 else np.nan,
     'iqr': calculate_iqr,
     'gini': calculate_gini,
@@ -4161,11 +4253,18 @@ class DataTransformHandler:
                 # Viktig: intervaller bruker >= / <= — object-strenger ("47") matcher ikke 45–47.
                 raw_orig = df[var].copy()  # bevares urørt ved prefix()
                 was_string = df[var].dtype == object or pd.api.types.is_string_dtype(df[var])
-                out_col = pd.to_numeric(df[var], errors='coerce')
                 # Manualen: "Verdier som allerede er omkodet påvirkes ikke av
                 # påfølgende regler" — masker bygges fra ORIGINALverdiene, og
                 # rader som alt er omkodet beskyttes mot senere regler.
-                orig = out_col.copy()
+                # Regelmaskene evalueres numerisk (orig); selve utkolonnen må
+                # derimot bevare umatchede verdier BYTE-IDENTISK — en
+                # to_numeric+str(int)-rundtur av hele kolonnen korrupterte
+                # '0301' -> '301', 'XXXX' -> NaN og '01.110' -> '1'.
+                orig = pd.to_numeric(df[var], errors='coerce')
+                if was_string:
+                    out_col = raw_orig.astype(object).copy()
+                else:
+                    out_col = orig.copy()
                 recoded = pd.Series(False, index=df.index)
                 for rule in args['rules']:
                     rule = rule.strip()
@@ -4224,7 +4323,12 @@ class DataTransformHandler:
                         mask = mask & ~recoded
                         if row_mask is not None:
                             mask = mask & row_mask
-                        out_col.loc[mask] = new_val
+                        write_val = new_val
+                        if was_string and isinstance(new_val, (int, float)) and not isinstance(new_val, bool):
+                            # Strengkolonner: omkodede verdier lagres som streng
+                            # (parstatus == '1' skal virke etter recode)
+                            write_val = str(int(new_val)) if float(new_val) == int(new_val) else str(new_val)
+                        out_col.loc[mask] = write_val
                         recoded = recoded | mask
                         if label_text is not None and isinstance(new_val, (int, float)):
                             if self.label_manager is not None:
@@ -4232,11 +4336,13 @@ class DataTransformHandler:
                                 d[int(new_val)] = label_text
 
                     # Spesialkoder i lhs: missing / nonmissing / * (enhver verdi)
+                    # Missing vurderes på RÅverdiene: 'XXXX' er ikke missing selv
+                    # om den ikke kan tolkes som tall.
                     if re.fullmatch(r'miss(?:ing)?', lhs, re.IGNORECASE):
-                        _apply_rule(col.isna())
+                        _apply_rule(raw_orig.isna())
                         continue
                     if re.fullmatch(r'nonmiss(?:ing)?', lhs, re.IGNORECASE):
-                        _apply_rule(col.notna())
+                        _apply_rule(raw_orig.notna())
                         continue
                     if lhs == '*':
                         _apply_rule(pd.Series(True, index=df.index))
@@ -4285,19 +4391,15 @@ class DataTransformHandler:
                     for lo_val, hi_val in ranges:
                         mask = mask | ((col >= lo_val) & (col <= hi_val))
                     _apply_rule(mask)
-                # Hele tall etter recode → nullable int (bedre tabulate/etiketter; unngår 8.0 vs 8)
-                if pd.api.types.is_numeric_dtype(out_col):
+                # Hele tall etter recode → nullable int (bedre tabulate/etiketter; unngår 8.0 vs 8).
+                # Strengkolonner er alt håndtert i _apply_rule (omkodede verdier
+                # skrives som streng, umatchede passerer byte-identisk gjennom).
+                if not was_string and pd.api.types.is_numeric_dtype(out_col):
                     sub = out_col.dropna()
                     if len(sub):
                         arr = sub.to_numpy(dtype=float, copy=False)
                         if np.all(np.isfinite(arr)) and np.all(arr == np.round(arr)):
                             out_col = out_col.round().astype('Int64')
-                # Bevar string-dtype: var variabelen strenger FØR recode, konverter tilbake.
-                # Dette sikrer at f.eks. parstatus == '1' virker etter recode.
-                if was_string:
-                    out_col = out_col.apply(
-                        lambda x: str(int(x)) if pd.notna(x) else None
-                    ).astype(object)
                 # prefix()/generate(): nye variabler med omkodete verdier,
                 # originalen beholdes urørt (manualen). Uten prefix: overskriv.
                 if prefix:
@@ -4344,6 +4446,20 @@ class LabelManager:
         except (ValueError, TypeError):
             return k
 
+    @classmethod
+    def _codelist_from_labels(cls, labels):
+        """Bygg codelist fra metadata-labels. Nøkler int-konverteres der mulig
+        (numeriske kolonner slår opp 301), men null-paddede originaler
+        ('0301') bevares OGSÅ som strengnøkkel — ellers kan betingelser på
+        label-tekst ('Oslo') aldri matche '0301'-strenger i data."""
+        mapping = {}
+        for k, v in labels.items():
+            ik = cls._label_key_to_int(k)
+            mapping[ik] = v
+            if isinstance(k, str) and not isinstance(ik, str) and str(ik) != k:
+                mapping[k] = v
+        return mapping
+
     def _load_from_catalog(self):
         """Pre-define codelists fra variable_metadata.json (labels eller codelist-felt)."""
         for var_name, meta in self.catalog.items():
@@ -4352,7 +4468,7 @@ class LabelManager:
             if isinstance(labels, dict):
                 cname = meta.get('codelist', f"{short}_labels")
                 if cname not in self.codelists:
-                    mapping = {self._label_key_to_int(k): v for k, v in labels.items()}
+                    mapping = self._codelist_from_labels(labels)
                     self.codelists[cname] = mapping
 
     def refresh_after_catalog_mutation(self):
@@ -4366,7 +4482,7 @@ class LabelManager:
                 continue
             short = var_name.split('/')[-1]
             cname = meta.get('codelist', f"{short}_labels")
-            self.codelists[cname] = {self._label_key_to_int(k): v for k, v in labels.items()}
+            self.codelists[cname] = self._codelist_from_labels(labels)
 
     def define_labels(self, name, pairs):
         """pairs: [(value, label), ...]"""
@@ -4406,12 +4522,12 @@ class LabelManager:
                 labels = meta.get('labels', meta.get('labels_dict'))
                 # Tom {} fra metadata: ikke returner tom codelist — fall tilbake til felles kommune-liste
                 if isinstance(labels, dict) and len(labels) > 0:
-                    return {self._label_key_to_int(k): v for k, v in labels.items()}
+                    return self._codelist_from_labels(labels)
         meta = self.catalog.get(var_name) or self._catalog_by_short.get(var_name.split('/')[-1] if '/' in str(var_name) else var_name)
         if meta:
             labels = meta.get('labels', meta.get('labels_dict'))
             if isinstance(labels, dict) and len(labels) > 0:
-                return {self._label_key_to_int(k): v for k, v in labels.items()}
+                return self._codelist_from_labels(labels)
         # Fallback: kommunevariabler uten egne labels får kodelisten fra felles kommunevariabel.
         # Vi sjekker både alias-path (f.eks. bosted <- BEFOLKNING_KOMMNR_FORMELL) og selve var_name.
         commune_sources = {
@@ -4430,11 +4546,11 @@ class LabelManager:
                 if base_meta:
                     labels = base_meta.get('labels', base_meta.get('labels_dict'))
                     if isinstance(labels, dict) and len(labels) > 0:
-                        return {self._label_key_to_int(k): v for k, v in labels.items()}
+                        return self._codelist_from_labels(labels)
             # Siste utvei (samme som MockDataEngine-minimal)
             ml = _MINIMAL_KOMMUNE_BASE.get('labels')
             if isinstance(ml, dict) and ml:
-                return {self._label_key_to_int(k): v for k, v in ml.items()}
+                return self._codelist_from_labels(ml)
         return None
 
     @staticmethod
@@ -4638,6 +4754,38 @@ def _parse_count_option(opt_val, default=10):
 
 
 class StatsEngine:
+    @staticmethod
+    def _t5_small_cell_check(row_vals, col_vals=None, dropna=True):
+        """T5: avsløringskontroll — stopp tabeller med for mange små celler.
+        Sjekkes på RÅ tellinger av cellene (uavhengig av om bruker vil ha
+        prosenter eller en volumtabell via summarize()). Deles av tabulate,
+        tabulate-panel, transitions-panel og telle-baserte figurer
+        (piechart, diskret histogram, sankey) via PlotHandler."""
+        if not _is_disclosure_control():
+            return
+        if col_vals is not None:
+            _raw_counts = pd.crosstab(row_vals, col_vals, dropna=dropna)
+        else:
+            _raw_counts = row_vals.value_counts(dropna=dropna)
+        _flat = _raw_counts.values.flatten() if hasattr(_raw_counts, 'values') else _raw_counts.to_numpy().flatten()
+        _total_cells = len(_flat)
+        if _total_cells > 0:
+            _low_cell = _dc_threshold('dc_tabulate_low_cell')
+            _low_cells = int((_flat < _low_cell).sum())
+            _low_ratio = _low_cells / _total_cells
+            if _low_ratio > _DC_TABULATE_LOW_RATIO:
+                _low_pct = f"{_low_ratio*100:.0f}"
+                raise ValueError(
+                    _t("Tabellen kan ikke vises pga. for mange små celler "
+                    "({low_cells} av {total_cells} celler har frekvens "
+                    "<{low_cell}, dvs. {low_pct}% — "
+                    "grensen er {limit_pct}%). "
+                    "Reduser antall kategorier eller utvid populasjonen.",
+                    low_cells=_low_cells, total_cells=_total_cells,
+                    low_cell=_low_cell, low_pct=_low_pct,
+                    limit_pct=int(_DC_TABULATE_LOW_RATIO*100))
+                )
+
     def execute(self, cmd, df, args, options):
         if cmd == 'generate':
             expr = args['expression']
@@ -4659,7 +4807,10 @@ class StatsEngine:
             evaluated = _py_eval_expr(df, expr)
 
             if line_cond:
-                mask = _py_eval_cond(df, line_cond)
+                # Bruk tolkerens dtype-bevisste mask når den finnes (samme vei
+                # som replace) — rå _py_eval_cond matcher ikke strengkodede
+                # kolonner (kjonn == 1 mot '1' ga stille bare missing).
+                mask = _line_condition_mask(df, line_cond, options)
                 df[args['target']] = np.where(mask, evaluated, np.nan)
             else:
                 df[args['target']] = evaluated
@@ -4673,6 +4824,10 @@ class StatsEngine:
                 stat, src = target['stat'], target['src']
                 new_var = target['target'] or src
                 stat_fn = AGG_STAT_ALIAS.get(stat, stat)
+                if stat == 'percent':
+                    # B7: samme semantikk som collapse (percent) — gruppens
+                    # andel av totalen, ikke andel ikke-missing innen gruppen.
+                    stat_fn = _percent_of_total_fn(df[src])
                 df[new_var] = df.groupby(by_var)[src].transform(stat_fn)
             return None
 
@@ -4712,6 +4867,12 @@ class StatsEngine:
             agg_dict = {}
             for t in args['targets']:
                 stat_fn = AGG_STAT_ALIAS.get(t['stat'], t['stat'])
+                if t['stat'] == 'percent':
+                    # B7: (percent) er gruppens andel av TOTALEN (summerer
+                    # til 100 over gruppene). Alias-lambdaen regner andel
+                    # ikke-missing INNEN gruppen — det ble alltid ~100.
+                    # Totalen må fanges her; en agg-lambda ser bare gruppen.
+                    stat_fn = _percent_of_total_fn(df[t['src']])
                 target_col = t['target'] or t['src']
                 agg_dict[target_col] = (t['src'], stat_fn)
             if not by_var:
@@ -4744,16 +4905,20 @@ class StatsEngine:
                     _df_w = df.copy()
                     for v in vars_to_sum:
                         _df_w[v] = _w_cols[v]
-                    grp = _df_w.groupby(by_var, dropna=False)[vars_to_sum]
                 else:
-                    grp = df.groupby(by_var, dropna=False)[vars_to_sum]
+                    _df_w = df
+                grp = _df_w.groupby(by_var, dropna=False)[vars_to_sum]
                 result = grp.agg(['mean', 'std', 'min', 'max', 'count'])
+                # T2 (D4): gini/iqr beregnes på SAMME winsoriserte kolonner
+                # som mean/std/min/max — å regne dem på råkolonnen ville
+                # lekke informasjon om ekstremverdiene resten av tabellen
+                # skjuler. Med DC av er _df_w == df (rå).
                 if 'gini' in options:
                     for v in vars_to_sum:
-                        result[(v, 'gini')] = df.groupby(by_var, dropna=False)[v].apply(calculate_gini)
+                        result[(v, 'gini')] = _df_w.groupby(by_var, dropna=False)[v].apply(calculate_gini)
                 if 'iqr' in options:
                     for v in vars_to_sum:
-                        result[(v, 'iqr')] = df.groupby(by_var, dropna=False)[v].apply(calculate_iqr)
+                        result[(v, 'iqr')] = _df_w.groupby(by_var, dropna=False)[v].apply(calculate_iqr)
                 return result
             # Bygg statistikk-rader: Gj.snitt, Std.avvik, Antall, persentiler
             col_map = {}
@@ -4767,10 +4932,12 @@ class StatsEngine:
                     col_map[label] = {v: _round_to_sig_digits(df[v].quantile(pct)) for v in vars_to_sum}
                 else:
                     col_map[label] = {v: df[v].quantile(pct) for v in vars_to_sum}
+            # T2 (D4): gini/iqr på samme winsoriserte kolonner som
+            # mean/std — konsistent T2-behandling (rå kolonner med DC av).
             if 'gini' in options:
-                col_map['Gini'] = {v: calculate_gini(df[v]) for v in vars_to_sum}
+                col_map['Gini'] = {v: calculate_gini(_w_cols[v]) for v in vars_to_sum}
             if 'iqr' in options:
-                col_map['IQR'] = {v: calculate_iqr(df[v]) for v in vars_to_sum}
+                col_map['IQR'] = {v: calculate_iqr(_w_cols[v]) for v in vars_to_sum}
             result = pd.DataFrame(col_map, index=vars_to_sum)
             return result
 
@@ -4899,14 +5066,23 @@ class StatsEngine:
             vars_list = [v for v in vars_list if v in df.columns and pd.api.types.is_numeric_dtype(df[v])]
             if not vars_list:
                 return pd.DataFrame()
-            grp = df.groupby('tid')[vars_list]
+            # T2 (D4): summarize-panel skal winsorisere som vanlig summarize —
+            # panelvarianten viste ellers eksakte min/max per tidspunkt.
+            # gini/iqr bruker samme winsoriserte kolonner (konsistent T2).
+            if _is_disclosure_control():
+                _df_w = df.copy()
+                for v in vars_list:
+                    _df_w[v] = _winsorize_series(df[v])
+            else:
+                _df_w = df
+            grp = _df_w.groupby('tid')[vars_list]
             result = grp.agg(['mean', 'std', 'min', 'max', 'count'])
             if 'gini' in options:
-                gini_by_tid = df.groupby('tid')[vars_list].apply(lambda g: g.apply(calculate_gini))
+                gini_by_tid = _df_w.groupby('tid')[vars_list].apply(lambda g: g.apply(calculate_gini))
                 gini_df = pd.DataFrame({('gini', v): gini_by_tid[v] for v in vars_list})
                 result = pd.concat([result, gini_df], axis=1)
             if 'iqr' in options:
-                iqr_by_tid = df.groupby('tid')[vars_list].apply(lambda g: g.apply(calculate_iqr))
+                iqr_by_tid = _df_w.groupby('tid')[vars_list].apply(lambda g: g.apply(calculate_iqr))
                 iqr_df = pd.DataFrame({('iqr', v): iqr_by_tid[v] for v in vars_list})
                 result = pd.concat([result, iqr_df], axis=1)
             return result
@@ -4923,35 +5099,6 @@ class StatsEngine:
                 label_fmt = 'label'
             else:
                 label_fmt = _get_default('label_format') or 'both'
-
-            def _t5_small_cell_check():
-                """T5: avsløringskontroll — stopp tabeller med for mange små
-                celler. Sjekkes på RÅ tellinger av cellene (uavhengig av om
-                bruker vil ha prosenter eller en volumtabell via summarize())."""
-                if not _is_disclosure_control():
-                    return
-                if var2:
-                    _raw_counts = pd.crosstab(df[var1], df[var2], dropna=dropna)
-                else:
-                    _raw_counts = df[var1].value_counts(dropna=dropna)
-                _flat = _raw_counts.values.flatten() if hasattr(_raw_counts, 'values') else _raw_counts.to_numpy().flatten()
-                _total_cells = len(_flat)
-                if _total_cells > 0:
-                    _low_cell = _dc_threshold('dc_tabulate_low_cell')
-                    _low_cells = int((_flat < _low_cell).sum())
-                    _low_ratio = _low_cells / _total_cells
-                    if _low_ratio > _DC_TABULATE_LOW_RATIO:
-                        _low_pct = f"{_low_ratio*100:.0f}"
-                        raise ValueError(
-                            _t("Tabellen kan ikke vises pga. for mange små celler "
-                            "({low_cells} av {total_cells} celler har frekvens "
-                            "<{low_cell}, dvs. {low_pct}% — "
-                            "grensen er {limit_pct}%). "
-                            "Reduser antall kategorier eller utvid populasjonen.",
-                            low_cells=_low_cells, total_cells=_total_cells,
-                            low_cell=_low_cell, low_pct=_low_pct,
-                            limit_pct=int(_DC_TABULATE_LOW_RATIO*100))
-                        )
 
             def _parse_sort_arg(opt_val):
                 """Parse argument til rowsort()/colsort(). Returnerer kodeverdi eller None."""
@@ -5063,12 +5210,25 @@ class StatsEngine:
                 # Volumtabell: summarize(var [, var2 ...]) [mean|std|sum|p50|p25|p75|gini|iqr]
                 # En gjennomsnitts-/sum-tabell over små celler avslører nær-individuelle
                 # verdier akkurat som en frekvenstabell, så T5 gjelder også her.
-                _t5_small_cell_check()
+                self._t5_small_cell_check(df[var1], df[var2] if var2 else None, dropna)
                 # summarize kan inneholde én eller flere komma-separerte variabler
                 val_var_spec = options['summarize']
                 val_vars = [v.strip() for v in str(val_var_spec).split(',') if v.strip()]
-                agg_map = {'mean': 'mean', 'std': 'std', 'sum': 'sum', 'p50': lambda x: x.quantile(0.5),
-                          'p25': lambda x: x.quantile(0.25), 'p75': lambda x: x.quantile(0.75),
+                # T2 + T8 (D3): volumtabellen skal bruke samme beskyttelse som
+                # vanlig summarize — winsoriser verdikolonnen globalt før
+                # gruppestatistikk, og vis persentiler med 3 signifikante
+                # sifre. Uten dette lakk rå gruppegjennomsnitt/-medianer i
+                # full presisjon forbi kontrollen tabulate ellers håndhever.
+                _dc_on = _is_disclosure_control()
+                if _dc_on:
+                    df = df.assign(**{v: _winsorize_series(df[v]) for v in val_vars
+                                      if v in df.columns})
+                def _q_agg(p):
+                    if _dc_on:
+                        return lambda x: _round_to_sig_digits(x.quantile(p))
+                    return lambda x: x.quantile(p)
+                agg_map = {'mean': 'mean', 'std': 'std', 'sum': 'sum', 'p50': _q_agg(0.5),
+                          'p25': _q_agg(0.25), 'p75': _q_agg(0.75),
                           'gini': calculate_gini, 'iqr': calculate_iqr}
                 agg_func = 'mean'
                 for k in ['p50', 'p25', 'p75', 'std', 'sum', 'gini', 'iqr']:
@@ -5147,7 +5307,7 @@ class StatsEngine:
             elif 'cellpct' in options: normalize = 'all'
 
             # T5: avsløringskontroll — stopp frekvenstabeller med for mange små celler.
-            _t5_small_cell_check()
+            self._t5_small_cell_check(df[var1], df[var2] if var2 else None, dropna)
 
             if var2:
                 ct = pd.crosstab(df[var1], df[var2], normalize=normalize, dropna=dropna,
@@ -5221,6 +5381,9 @@ class StatsEngine:
                 row_vals.name = ' x '.join(row_idx)
             else:
                 row_vals = df[var1]
+            # T5: samme småcelle-kontroll som tabulate — panelvarianten viser
+            # de samme råcellene (variabel x tid) og kan ikke gå utenom.
+            self._t5_small_cell_check(row_vals, df['tid'], dropna)
             ct = pd.crosstab(row_vals, df['tid'], normalize='columns' if 'colpct' in options else False, dropna=dropna)
             if 'rowpct' in options:
                 ct = ct.div(ct.sum(axis=1), axis=0)
@@ -5253,6 +5416,9 @@ class StatsEngine:
                 if pairs.empty:
                     results.append(pd.DataFrame())
                     continue
+                # T5: overgangssannsynlighetene er rad-normaliserte råceller —
+                # kontroller de underliggende tellingene før tabellen bygges.
+                self._t5_small_cell_check(pairs[var], pairs['_next'], dropna=True)
                 ct = pd.crosstab(pairs[var], pairs['_next'], normalize='index')
                 lm = options.get('_label_manager')
                 if lm:
@@ -6454,6 +6620,15 @@ class PlotHandler:
         else:
             # mean, median, sum, sd, min, max: numerisk med optional over()
             agg_fn = agg_map.get(stat, 'mean')
+            # T2: winsoriser numeriske kolonner før aggregatet beregnes —
+            # samme behandling som histogram/boxplot/scatter. Uten dette
+            # viste barchart (min)/(max) den eksakte laveste/høyeste
+            # enkeltverdien i hver gruppe (D2).
+            if _is_disclosure_control():
+                _w_cols = {v: _winsorize_series(df[v]) for v in vars_list
+                           if pd.api.types.is_numeric_dtype(df[v])}
+                if _w_cols:
+                    df = df.assign(**_w_cols)
             if len(vars_list) > 1:
                 # Flere numeriske variabler: én søyle per variabel (evt. per gruppe)
                 if over_var and over_var in df.columns:
@@ -6531,6 +6706,10 @@ class PlotHandler:
         if _is_disclosure_control() and not discrete and pd.api.types.is_numeric_dtype(s):
             s = _winsorize_series(s)
         if discrete or not pd.api.types.is_numeric_dtype(s):
+            # T5: et diskret histogram viser de samme råtellingene som
+            # tabulate — samme småcelle-kontroll (D2). Kontinuerlige
+            # histogrammer dekkes av T2-winsoriseringen over.
+            StatsEngine._t5_small_cell_check(s, None, dropna=True)
             vc = s.value_counts().sort_index()
             if percent:
                 vc = (vc / vc.sum() * 100).round(2)
@@ -6705,6 +6884,9 @@ class PlotHandler:
         if var not in df.columns:
             return None
         stat = args.get('stat', 'count').lower()
+        # T5: kakediagrammet viser de samme råtellingene (evt. som andeler)
+        # som tabulate ville blokkert — samme småcelle-kontroll (D2).
+        StatsEngine._t5_small_cell_check(df[var], None, dropna=False)
         s = df[var].value_counts(dropna=False).sort_index()
         if s.empty:
             return None
@@ -6785,6 +6967,9 @@ class PlotHandler:
 
         for i in range(len(vars_list) - 1):
             va, vb = vars_list[i], vars_list[i + 1]
+            # T5: lenkene er råceller fra krysstabellen va x vb — en sankey
+            # med lenker på 1-2 viser det tabulate ville blokkert (D2).
+            StatsEngine._t5_small_cell_check(sub[va], sub[vb], dropna=True)
             grp = sub.groupby([va, vb], dropna=False).size().reset_index(name='count')
             if grp.empty:
                 continue
@@ -7309,12 +7494,17 @@ class MicroInterpreter:
 
         # Hvis verdi er streng og matcher en label, bruk kode (labeltekst -> kode)
         if isinstance(value, str) and cl:
-            for code, label in cl.items():
-                if label == value:
-                    aux['int_code'] = code
-                    aux['str_code'] = str(code)
-                    value = code
-                    break
+            # Samle ALLE kodeformer for labelen: kodelisten kan holde både
+            # int-nøkkelen (301) og den null-paddede originalen ('0301') —
+            # begge må bli kandidater, ellers matcher 'Oslo' aldri '0301'.
+            matches = [code for code, label in cl.items() if label == value]
+            if matches:
+                int_match = next((c for c in matches if not isinstance(c, str)), None)
+                str_match = next((c for c in matches if isinstance(c, str)), None)
+                if int_match is not None:
+                    aux['int_code'] = int_match
+                aux['str_code'] = str_match if str_match is not None else str(matches[0])
+                value = int_match if int_match is not None else matches[0]
             # Ellers: hvis verdi er streng som ser ut som tall og finnes som kode
             if value in cl:
                 aux.setdefault('int_code', value if not isinstance(value, str) else None)
@@ -7346,9 +7536,59 @@ class MicroInterpreter:
             aux['str_code'] = str(aux['int_code'])
         return prim, aux
 
+    @staticmethod
+    def _strip_parens_fully(cond):
+        """Fjern balanserte ytterparenteser til det ikke er flere:
+        '((a == 1))' -> 'a == 1'. Bruker den streng-/dybdebevisste
+        modul-hjelperen; rører ikke funksjonskall ('inrange(...)'
+        starter ikke med '(')."""
+        prev = None
+        s = cond.strip()
+        while s != prev:
+            prev = s
+            s = _strip_outer_parens(s)
+        return s
+
+    def _eval_compound_condition_mask(self, df, cond):
+        """Dekomponer sammensatt betingelse (& / |) til dtype-bevisste
+        del-masker og kombiner dem. Presedens som Stata/Python: & binder
+        sterkere enn |, så det splittes på | først. Returnerer None hvis en
+        del ikke kan parses trygt (caller faller da tilbake til rå eval)."""
+        cond = self._strip_parens_fully(cond)
+        for sep in ('|', '&'):
+            parts = _split_top_level_bool(cond, sep)
+            if len(parts) > 1:
+                masks = []
+                for part in parts:
+                    part = part.strip()
+                    if not part:
+                        return None
+                    m = self._eval_condition_mask(df, part)
+                    if m is None:
+                        return None
+                    masks.append(m.fillna(False) if hasattr(m, 'fillna') else m)
+                out = masks[0]
+                for m in masks[1:]:
+                    out = (out | m) if sep == '|' else (out & m)
+                return out
+        # Ingen topp-nivå & eller | (de lå f.eks. inne i parenteser/anførsel):
+        # prøv som enkel betingelse etter parentes-stripping.
+        return self._eval_simple_condition_mask(df, cond)
+
     def _eval_condition_mask(self, df, cond):
-        """Bygger boolsk mask fra betingelse. Støtter ==, !=, <, >, <=, >= og label-oppslag.
-        Returnerer pandas Series (mask) eller None ved parsing-feil (da kan caller falle tilbake til query)."""
+        """Bygger boolsk mask fra betingelse. Støtter ==, !=, <, >, <=, >=,
+        label-oppslag og sammensatte uttrykk med & / | (dekomponert til
+        dtype-bevisste del-masker). Returnerer pandas Series (mask) eller
+        None ved parsing-feil (da kan caller falle tilbake til query/eval)."""
+        if cond:
+            stripped = self._strip_parens_fully(cond)
+            if '&' in stripped or '|' in stripped:
+                return self._eval_compound_condition_mask(df, stripped)
+            cond = stripped
+        return self._eval_simple_condition_mask(df, cond)
+
+    def _eval_simple_condition_mask(self, df, cond):
+        """Mask for én enkel betingelse (var op verdi) — ingen & / |."""
         parsed = self._parse_condition(cond)
         if not parsed:
             return None
@@ -7490,21 +7730,23 @@ class MicroInterpreter:
         return parts
 
     def _eval_pp_operand(self, operand, env):
-        """Evaluer ett ledd i en `++`-kjede. Ukjente symboler beholdes som streng."""
+        """Evaluer ett ledd i en `++`-kjede. Returnerer (verdi, ok):
+        ok=False betyr at leddet ikke kunne evalueres på parse-tid
+        (ukjent symbol eller kolonneuttrykk) og er beholdt som tekst."""
         s = operand.strip()
         if not s:
-            return ''
+            return '', True
         # Anførselstegn-streng
         if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
-            return s[1:-1]
+            return s[1:-1], True
         # Python-eval (aritmetikk, funksjonskall, navneoppslag fra bindinger)
         try:
             val = eval(s, {'__builtins__': {}}, env)
             if isinstance(val, float) and val == int(val):
-                return str(int(val))
-            return str(val)
+                return str(int(val)), True
+            return str(val), True
         except Exception:
-            return s  # behold som symbol-literal (inkl. `@`, `_`, osv.)
+            return s, False  # behold som symbol-literal (inkl. `@`, `_`, osv.)
 
     # Topp-nivå strukturelle skiller i en kommandolinje. `++`-kjeder
     # krysser ikke disse. Whitespace rundt ord-skiller (if/as/to) er nødvendig.
@@ -7534,7 +7776,32 @@ class MicroInterpreter:
                 env = self._binding_eval_env()
             leading = seg[:len(seg) - len(seg.lstrip())]
             trailing = seg[len(seg.rstrip()):]
-            joined = ''.join(self._eval_pp_operand(p, env) for p in parts)
+            evaluated = [self._eval_pp_operand(p, env) for p in parts]
+            # B4: et ledd som ikke lot seg evaluere på parse-tid og er et
+            # rent funksjonskall (f.eks. `string(a)`) er et kjøretids-uttrykk
+            # over kolonner. Tekstlig liming ga ugyldig Python
+            # (`string(a)_string(b)` → SyntaxError) — nettopp for linjen
+            # feilmeldingene for collapse by()/merge on anbefaler. Oversett i
+            # stedet hele kjeden til Python-strengkonkatenasjon som
+            # _py_eval_expr evaluerer på kjøretid, med string()-koersjon av
+            # ikke-siterte ledd. Alle andre kjeder limes fortsatt tekstlig —
+            # det er navnekonstruksjon (siv_ ++ $år → siv_2020,
+            # `barchart (mean) lønn++$år` → lønn2018), ikke
+            # verdikonkatenasjon.
+            _runtime = any(
+                (not ok) and re.fullmatch(r'\w+\(.*\)', val, re.DOTALL)
+                for val, ok in evaluated
+            )
+            if _runtime:
+                def _coerce(p):
+                    s = p.strip()
+                    if ((s.startswith("'") and s.endswith("'"))
+                            or (s.startswith('"') and s.endswith('"'))):
+                        return s
+                    return f"string({s})"
+                joined = ' + '.join(_coerce(p) for p in parts)
+            else:
+                joined = ''.join(val for val, _ok in evaluated)
             return leading + joined + trailing
         while i < n:
             ch = text[i]
@@ -9032,6 +9299,8 @@ class MicroInterpreter:
             run_opts = dict(opts)
             if cond and cmd == 'generate':
                 run_opts['_condition'] = cond
+                # Samme dtype-bevisste maskebygging som replace får (B2)
+                run_opts['_condition_mask'] = self._eval_condition_mask(df_target, cond)
             if cmd in ['tabulate', 'tabulate-panel', 'transitions-panel']:
                 run_opts['_label_manager'] = self.label_manager
             if cmd in ['generate', 'aggregate', 'collapse', 'summarize', 'summarize-panel', 'correlate', 'ci', 'anova', 'tabulate', 'tabulate-panel', 'normaltest', 'transitions-panel']:
@@ -9042,6 +9311,28 @@ class MicroInterpreter:
                 if cmd in _t7_cmds and _is_disclosure_control():
                     try:
                         self._check_t7_summarize_pop(len(df_target), cmd)
+                        # T7 (D4): gruppert summarize — hver by()/tid-gruppe er
+                        # sin egen populasjon. Uten denne sjekken fikk en
+                        # gruppe på 2 mean/std/min/max selv om total-N passerte.
+                        _t7_grp_col = None
+                        if cmd == 'summarize':
+                            _t7_grp_col = opts.get('by')
+                        elif cmd == 'summarize-panel':
+                            _t7_grp_col = 'tid'
+                        if (_t7_grp_col and hasattr(df_target, 'columns')
+                                and _t7_grp_col in df_target.columns):
+                            _gc = df_target.groupby(_t7_grp_col, dropna=False).size()
+                            _min_pop = _dc_threshold('dc_min_summarize')
+                            _small = _gc[_gc < _min_pop]
+                            if len(_small) > 0:
+                                raise ValueError(
+                                    _t("Gruppen {gval} i {gvar} har {n} enheter. "
+                                       "microdata.no krever minst {min_pop} enheter "
+                                       "for deskriptiv statistikk ({cmd}) — også per "
+                                       "gruppe. Unntak: ren count/sum er tillatt.",
+                                       gval=_small.index[0], gvar=_t7_grp_col,
+                                       n=int(_small.iloc[0]), min_pop=_min_pop, cmd=cmd)
+                                )
                     except ValueError as _t7_err:
                         self._log(_t("FEIL: {err}", err=_t7_err))
                         return

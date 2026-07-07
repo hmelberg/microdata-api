@@ -160,6 +160,11 @@ def synth_education(unit_id, age: int | None = None, as_of_year: int | None = No
         birth_year = ref_year - 40  # working-age fallback
     else:
         birth_year = ref_year - int(age)
+        # Children/teens can't yet hold a NUS2000 attainment level — without
+        # this guard, birth years > 2005 fall into the youngest cohort bucket
+        # (9999), which still assigns 30% "high" (tertiary) to 10-year-olds.
+        if int(age) < 18:
+            return "low"
 
     probs = _edu_prior_for_birth_year(birth_year)
 
