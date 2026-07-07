@@ -484,7 +484,24 @@ class SafeColumn:
     def mean(self): return self._reduce("mean")
     def sum(self): return self._reduce("sum")
     def count(self): return self._reduce("count")
-    def median(self): return self._reduce("median")
+    def median(self):
+        """Order-statistic median (same rule as .quantile(0.5)/describe()'s
+        "50%": released only when at least min_n observations lie at/beyond
+        it in both directions — see _order_stat). NOT routed through
+        _reduce(): that only checks the plain non-null count (n >= k), which
+        for n close to k gives support of roughly n/2 at the median position
+        — well under k. Fixed 2026-07-07; see docs/superpowers/2026-07-07-
+        code-review.md §1a."""
+        s = self._numeric()
+        policy = self._verbs._policy
+        k = _descriptive_k(policy)
+        sf = policy.suppression.percentile_sig_figs
+        value, support = _order_stat(s, "q", k, q=0.5, sig_figs=sf)
+        return Released(
+            {"type": "scalar", "stat": "median", "value": value,
+             "n": support if value is not None else None},
+            audit={"kind": "scalar", "verb": "column.median", "min_n": k,
+                   "support": support, "suppressed": value is None, "backend": "pandas"})
     def std(self): return self._reduce("std")
     def var(self): return self._reduce("var")
     # shape / precision stats — dimensionless, so round_to (a magnitude coarsener)
@@ -1167,14 +1184,26 @@ class SafeFrame:
         per_col = []
         for c in cols.columns:
             s = cols[c]
-            n = int(s.notna().sum())
-            if stat == "count":
-                raw = int(s.count())
-            elif stat == "nunique":
-                raw = int(s.nunique())
+            if stat == "median":
+                # order statistic: releasable iff min(#<=v, #>=v) >= k, NOT a
+                # plain non-null-count check — for n close to k, roughly half
+                # the column supports the median position, well under k. Feed
+                # _order_stat's own (value, support) through unchanged so the
+                # generic n<k gate below applies to the real support figure
+                # (2026-07-07 fix; mirrors SafeColumn.median() above).
+                raw, n = _order_stat(s.dropna(), "q", _descriptive_k(policy), q=0.5,
+                                     sig_figs=policy.suppression.percentile_sig_figs)
+                if raw is None:
+                    raw = 0.0    # suppressed by n<k below regardless of this placeholder
             else:
-                src = _winsorized_series(s, policy) if stat in _WINSOR_STATS else s
-                raw = getattr(src, stat)()
+                n = int(s.notna().sum())
+                if stat == "count":
+                    raw = int(s.count())
+                elif stat == "nunique":
+                    raw = int(s.nunique())
+                else:
+                    src = _winsorized_series(s, policy) if stat in _WINSOR_STATS else s
+                    raw = getattr(src, stat)()
             per_col.append((c, raw, n))
         return _release_frame_reduce(policy, stat, per_col, rounded=rounded, backend="pandas")
 
@@ -1185,22 +1214,25 @@ class SafeFrame:
         num = self._df.select_dtypes("number")
         if num.shape[1] == 0:
             raise DisclosureError("describe needs at least one numeric column")
-        k = _descriptive_k(self._verbs._policy)
-        sf = self._verbs._policy.suppression.percentile_sig_figs
-        kc = self._verbs._policy.min_n
+        policy = self._verbs._policy
+        k = _descriptive_k(policy)
+        sf = policy.suppression.percentile_sig_figs
+        kc = policy.min_n
+        w = winsorize if winsorize is not None else _winsor_p(policy)   # Tiltak 2 default
         data = {}
         for c in num.columns:
             s = num[c].dropna()
             n = int(s.shape[0])
+            sw = _winsorized_series(s, policy)                          # for mean/std
             agg = (lambda f: float(f) if n >= k else None)      # mean/std: not sig-rounded
             data[str(c)] = {
                 "count": n if n >= kc else None,
-                "mean": agg(s.mean()), "std": agg(s.std()),
-                "min": _order_stat(s, "min", k, winsorize=winsorize, sig_figs=sf)[0],
+                "mean": agg(sw.mean()), "std": agg(sw.std()),
+                "min": _order_stat(s, "min", k, winsorize=w, sig_figs=sf)[0],
                 "25%": _order_stat(s, "q", k, q=0.25, sig_figs=sf)[0],
                 "50%": _order_stat(s, "q", k, q=0.50, sig_figs=sf)[0],
                 "75%": _order_stat(s, "q", k, q=0.75, sig_figs=sf)[0],
-                "max": _order_stat(s, "max", k, winsorize=winsorize, sig_figs=sf)[0],
+                "max": _order_stat(s, "max", k, winsorize=w, sig_figs=sf)[0],
             }
         tab = pd.DataFrame(data).reindex(
             ["count", "mean", "std", "min", "25%", "50%", "75%", "max"])

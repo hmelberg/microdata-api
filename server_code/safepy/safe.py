@@ -198,7 +198,15 @@ class SafeVerbs(StatsMixin):
             raise DisclosureError(
                 f"agg '{agg}' is not allowed; choose one of {sorted(_ALLOWED_AGGS)}")
         df = _unwrap(df)
-        counts = df.groupby(by, observed=True)[value].size()
+        # Suppression must gate on how many rows actually CONTRIBUTE a value
+        # (.count(), skips NaN), not on raw row count (.size()) — a group of
+        # 10 rows with 9 NaNs and 1 real value must suppress like the n=1 cell
+        # it is. "size" is the one exception: there the released value IS the
+        # row count, so gating its own release on that same row count is
+        # correct (and .size()/.count() coincide there since the "group_by"
+        # key columns are never null under groupby(observed=True)).
+        counts = (df.groupby(by, observed=True)[value].size() if agg == "size"
+                 else df.groupby(by, observed=True)[value].count())
         work = _winsorize_col(df, value, self._policy) if agg in _WINSOR_AGGS else df
         grouped = work.groupby(by, observed=True)[value]
         table = counts if agg == "size" else getattr(grouped, agg)()
@@ -263,7 +271,12 @@ class SafeVerbs(StatsMixin):
         # a multi-stat table mixes counts and descriptive stats; use the stricter
         # descriptive floor when any descriptive stat is present.
         k = max([self._min_n(min_n)] + [_agg_min_n(self._policy, s) for s in stats])
-        counts = df.groupby(by, observed=True)[value].size()
+        # Same non-null-vs-row-count distinction as group_agg above: the whole
+        # row shares one suppression threshold, so if any requested stat is
+        # NaN-sensitive (i.e. anything but "size" itself), the threshold must
+        # be gated on contributing (non-null) rows, not raw row count.
+        counts = (df.groupby(by, observed=True)[value].size() if set(stats) <= {"size"}
+                 else df.groupby(by, observed=True)[value].count())
         # winsorize the value if any requested stat is moment-based (median barely
         # moves under 1% winsorization, so a shared source is acceptable).
         work = _winsorize_col(df, value, self._policy) if any(

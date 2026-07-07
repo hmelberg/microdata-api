@@ -127,10 +127,18 @@ def _native_group_agg(pl_df: pl.DataFrame, by: list, value: str, agg: str, polic
     # drop rows with a null group key so we match pandas groupby(observed=True),
     # which excludes them — a lone null-key group would be an unpaired small cell.
     pl_df = pl_df.drop_nulls(by)
-    counts = (_eager(pl_df.group_by(by).agg(pl.len().alias("__n")))
-              .to_pandas().set_index(by)["__n"])
     if agg == "size":
+        # here the released value IS the row count, so gating its own release
+        # on that same row count is correct (mirrors safe.py's group_agg).
+        counts = (_eager(pl_df.group_by(by).agg(pl.len().alias("__n")))
+                  .to_pandas().set_index(by)["__n"])
         return counts.copy(), counts
+    # every other agg is NaN-sensitive: suppression must gate on rows that
+    # actually contribute a value (pl.col(value).count() skips nulls), not
+    # raw row count — a group of 10 rows with 9 nulls and 1 real value must
+    # suppress like the n=1 cell it is (safe.py's group_agg, same bug/fix).
+    counts = (_eager(pl_df.group_by(by).agg(pl.col(value).count().alias("__n")))
+              .to_pandas().set_index(by)["__n"])
     work = _winsorize_polars(pl_df, value, agg, policy)
     expr = getattr(pl.col(value), agg)()          # mean/sum/std/var/median/count
     table = (_eager(work.group_by(by).agg(expr.alias("__v")))

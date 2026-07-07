@@ -273,27 +273,43 @@ class HEAuthority:
         # cells below k are never decrypted, not merely suppressed afterwards.
         k = max(self._verbs._min_n(min_n), _agg_min_n(self._policy, agg))
         table = pd.Series(np.nan, index=counts.index, dtype=float, name=value)
+        # nn_counts is the REAL suppression basis for every agg except "size":
+        # the decrypted non-null mask-sum, not the raw (possibly-missing-laden)
+        # unit count — mirrors the safe.py/polars_api.py group_agg fix. Starts
+        # as a copy of the raw counts so cells the cheap pre-check below skips
+        # (raw count already < k, so the non-null count can only be lower or
+        # equal) still report a correctly-suppressing value to _release_group_agg.
+        nn_counts = counts.copy()
         for key, g in zip(keys, gs):
-            if g["n"] < k:
-                continue                       # suppressed: never decrypted
             if agg == "size":
+                # here the released value IS the raw unit count, so gating its
+                # own release on that same count is correct (mirrors safe.py).
+                if g["n"] < k:
+                    continue
                 table[key] = g["n"]
-            elif agg == "count":
-                table[key] = self._dec(pub, g["count"])
-            else:
-                s = self._dec(pub, g["sum"]) / scale
-                if agg == "sum":
-                    table[key] = s
-                    continue
-                nn = self._dec(pub, g["count"])
-                if agg == "mean":
-                    table[key] = s / nn if nn else np.nan
-                    continue
-                sq = self._dec(pub, g["sum_sq"]) / (scale * scale)
-                var = (sq - s * s / nn) / (nn - 1) if nn > 1 else np.nan
-                table[key] = var if agg == "var" else float(np.sqrt(var))
+                continue
+            if g["n"] < k:
+                continue                       # nn <= g["n"] always: cheap pre-check,
+                                                # skip decrypting an obviously-tiny cell
+            nn = self._dec(pub, g["count"])    # THE real gate: non-null contributing count
+            nn_counts[key] = nn
+            if nn < k:
+                continue                       # suppressed: sum/sum_sq never decrypted
+            if agg == "count":
+                table[key] = nn
+                continue
+            s = self._dec(pub, g["sum"]) / scale
+            if agg == "sum":
+                table[key] = s
+                continue
+            if agg == "mean":
+                table[key] = s / nn if nn else np.nan
+                continue
+            sq = self._dec(pub, g["sum_sq"]) / (scale * scale)
+            var = (sq - s * s / nn) / (nn - 1) if nn > 1 else np.nan
+            table[key] = var if agg == "var" else float(np.sqrt(var))
         return self._verbs._release_group_agg(
-            table, counts, agg=agg, by=by, value=value,
+            table, counts if agg == "size" else nn_counts, agg=agg, by=by, value=value,
             min_n=min_n, round=round, backend="paillier")
 
     def ols(self, ds: dict, *, y: str, x, min_n=None) -> Released:

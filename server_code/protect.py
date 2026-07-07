@@ -21,6 +21,40 @@ from typing import Any, Callable, Iterable, Sequence
 import numpy as np
 import pandas as pd
 
+
+def _t(s, **kw):
+    # Meldingsspråk følger m2py.M2PY_LANG ('no' er nøkkelspråket; mangler
+    # oversettelse vises norsk). Lokal katalog per modul.
+    try:
+        import sys
+        _lang = getattr(sys.modules.get('m2py'), 'M2PY_LANG', 'no')
+    except Exception:
+        _lang = 'no'
+    if _lang == 'en':
+        s = _MESSAGES_EN.get(s, s)
+    return s.format(**kw) if kw else s
+
+
+_MESSAGES_EN = {
+    # norsk nøkkel -> engelsk
+    "{verb} er deterministisk per verdi; delvis anvendelse "
+    "(share={share}) støttes ikke fordi det ville gitt inkonsistente "
+    "data. Bruk share=1.0 (standard).":
+        "{verb} is deterministic per value; partial application "
+        "(share={share}) is not supported because it would produce "
+        "inconsistent data. Use share=1.0 (default).",
+    "k_min={k_min} < mål k={k}":
+        "k_min={k_min} < target k={k}",
+    "k-anonymisering nådde ikke mål k={k}: minste gruppe har "
+    "k_min={k_min} etter {max_iterations} iterasjoner. Øk "
+    "max_iterations, reduser k, eller generaliser/fjern quasi-"
+    "identifikatorer.":
+        "k-anonymization did not reach target k={k}: smallest group has "
+        "k_min={k_min} after {max_iterations} iterations. Increase "
+        "max_iterations, reduce k, or generalize/remove quasi-"
+        "identifiers.",
+}
+
 # Public API: data-side verbs, meta verbs, audit + risk reporting.
 __all__ = [
     "TransformLog",
@@ -117,6 +151,19 @@ def _resolve_random_state(random_state: int | np.random.Generator | None) -> np.
     if isinstance(random_state, np.random.Generator):
         return random_state
     return np.random.default_rng(random_state)
+
+
+def _reject_inert_share(share, verb: str) -> None:
+    """Deterministiske verb anvender seg på hver verdi likt. En `share` < 1
+    ble tidligere godtatt men stille ignorert; delvis anvendelse ville gitt
+    inkonsistente data (noen rader grovkornet, andre ikke). Avvis tydelig."""
+    if share is not None and share != 1.0:
+        raise ValueError(_t(
+            "{verb} er deterministisk per verdi; delvis anvendelse "
+            "(share={share}) støttes ikke fordi det ville gitt inkonsistente "
+            "data. Bruk share=1.0 (standard).",
+            verb=verb, share=share,
+        ))
 
 
 def _validate_columns(data: pd.DataFrame, columns: str | Sequence[str]) -> list[str]:
@@ -610,9 +657,10 @@ def coarsen(
     mode : {'nearest', 'floor', 'ceil'}, default 'nearest'
         Direction of snapping.
     unit_id, share, random_state
-        Accepted for signature consistency but inert — `coarsen` is
-        deterministic per-value, so unit-aware draws and partial selection
-        do not apply.
+        Accepted for signature consistency. `coarsen` is deterministic
+        per-value, so `unit_id`/`random_state` are inert; a non-default
+        `share` (< 1.0) is rejected rather than silently ignored, since
+        partial coarsening would produce inconsistent data.
 
     Returns
     -------
@@ -629,6 +677,7 @@ def coarsen(
         raise ValueError(
             f"mode must be 'nearest', 'floor', or 'ceil'; got {mode!r}"
         )
+    _reject_inert_share(share, "coarsen")
     columns = _validate_columns(data, columns)
     out = data.copy()
     for col in columns:
@@ -839,6 +888,7 @@ def year(
     January 1 of that year. `bin=N` produces N-year period labels like
     "1990-1994".
     """
+    _reject_inert_share(share, "year")
     columns = _validate_columns(data, columns)
     out = data.copy()
     for col in columns:
@@ -868,6 +918,7 @@ def month(
     share: float = 1.0,
 ) -> pd.DataFrame:
     """Truncate dates to month resolution. `bin=3` groups into quarters."""
+    _reject_inert_share(share, "month")
     columns = _validate_columns(data, columns)
     out = data.copy()
     for col in columns:
@@ -1399,13 +1450,20 @@ def swap(
             n_swap = int(round(n * share))
             col_idx = out.columns.get_loc(col)
             if method == "rank":
+                # order[pos] = rad-indeks ved rang-posisjon pos.
                 order = out[col].rank(method="first").values.argsort()
+                # Invers: rang-posisjonen til hver rad. Uten denne ble den
+                # tilfeldige rad-indeksen `i` brukt som om den var en rang-
+                # posisjon, så byttepartneren var ikke nær i verdi.
+                rank_pos = np.empty(n, dtype=int)
+                rank_pos[order] = np.arange(n)
+                window = max(1, int(n * swap_range_pct))
                 pairs_done = 0
                 attempts = 0
                 while pairs_done < n_swap // 2 and attempts < n_swap * 10:
                     i = int(rng.integers(0, n))
-                    window = max(1, int(n * swap_range_pct))
-                    j_candidates = order[max(0, i - window):min(n, i + window + 1)]
+                    pos_i = int(rank_pos[i])
+                    j_candidates = order[max(0, pos_i - window):min(n, pos_i + window + 1)]
                     j = int(rng.choice(j_candidates))
                     if j != i:
                         a = out.iloc[i, col_idx]
@@ -1552,13 +1610,18 @@ def _suppress_table(
         idx_iter = list(out.index)
         for idx in idx_iter:
             contribs = sorted(contributions.get(idx, []), reverse=True)
-            if len(contribs) < 3:
+            if not contribs:
+                # Ingen bidragsdata for cellen — ingenting å vurdere
                 continue
-            x1, x2 = contribs[0], contribs[1]
+            x1 = contribs[0]
+            if x1 == 0:
+                # Alle bidrag er null — ingenting å avsløre
+                continue
             sum_rest = sum(contribs[2:])
-            if sum_rest == 0 or x1 == 0:
-                continue
-            if sum_rest / x1 < p_percent:
+            # 1-2 bidragsytere er maksimalt avslørende (nest største kan
+            # beregne den største eksakt); sum_rest == 0 gir samme situasjon.
+            # Begge skal alltid undertrykkes — ikke hoppes over.
+            if len(contribs) < 3 or sum_rest == 0 or sum_rest / x1 < p_percent:
                 if isinstance(out, pd.Series):
                     out[idx] = np.nan
                 else:
@@ -1667,6 +1730,7 @@ def _suppress_plot(
     bins: int = 20,
     min_count: int = 5,
     jitter: tuple[float, float] | None = None,
+    random_state: int | np.random.Generator | None = None,
 ):
     x, y = xy
     x = np.asarray(x)
@@ -1684,7 +1748,7 @@ def _suppress_plot(
         h_safe = np.where(h >= min_count, h, 0)
         return {"edges": edges, "counts": h_safe}
     if jitter is not None:
-        rng = np.random.default_rng()
+        rng = _resolve_random_state(random_state)
         sd_x, sd_y = jitter
         return (x + rng.normal(0, sd_x, size=len(x)),
                 y + rng.normal(0, sd_y, size=len(y)))
@@ -1770,7 +1834,10 @@ def risk(
     t_max = None
     if sensitive:
         sens_col = sensitive[0]
+        # Global fordeling for t-closeness (total-variasjonsavstand per gruppe).
+        global_probs = data[sens_col].value_counts(normalize=True)
         l_vals = []
+        t_vals = []
         # iterate over equivalence classes; build mask from quasi_id tuple
         for keys, _ in eq_classes.items():
             if not isinstance(keys, tuple):
@@ -1781,12 +1848,18 @@ def risk(
             sub = data.loc[mask, sens_col]
             if len(sub) == 0:
                 continue
-            probs = sub.value_counts(normalize=True).values
+            sub_probs = sub.value_counts(normalize=True)
+            probs = sub_probs.values
             entropy = -np.sum(probs * np.log(np.clip(probs, 1e-12, 1)))
             l_vals.append(np.exp(entropy))
+            # t-closeness: 0.5 * Σ|P_gruppe(v) − P_global(v)| over kategoriene
+            aligned = sub_probs.reindex(global_probs.index, fill_value=0.0)
+            t_vals.append(0.5 * float(np.abs(aligned.values - global_probs.values).sum()))
         if l_vals:
             l_min = float(min(l_vals))
             l_median = float(np.median(l_vals))
+        if t_vals:
+            t_max = float(max(t_vals))
 
     suggestions = []
     if k_min < 5:
@@ -2092,6 +2165,23 @@ def _profile_k_anonymize(
         log.add(function="collapse", columns=[worst_col],
                 params={"rare_below": k}, rows_affected=len(out),
                 notes=f"iteration {iteration}, worst k_min={report.k_min}")
+    # Etter løkka: verifiser at målet faktisk er nådd. Tidligere kunne
+    # funksjonen returnere data som IKKE var k-anonyme (iterasjonene tok slutt,
+    # eller ingen kolonne lot seg kollapse) med en ren logg — verste utfall for
+    # et personvern-verktøy.
+    final = risk(out, quasi_ids=list(quasi_ids), unit_id=unit_id)
+    if final.k_min < k:
+        log.add(function="_k_anonymize_FAILED",
+                params={"k": k, "max_iterations": max_iterations},
+                rows_affected=len(out),
+                notes=_t("k_min={k_min} < mål k={k}", k_min=final.k_min, k=k))
+        raise ValueError(_t(
+            "k-anonymisering nådde ikke mål k={k}: minste gruppe har "
+            "k_min={k_min} etter {max_iterations} iterasjoner. Øk "
+            "max_iterations, reduser k, eller generaliser/fjern quasi-"
+            "identifikatorer.",
+            k=k, k_min=final.k_min, max_iterations=max_iterations,
+        ))
     return out, log
 
 
