@@ -182,5 +182,20 @@ class PandasProtect:
             })
             out.index.name = "term"
             return out
-        except Exception:
+        except Exception as exc:
+            # 2026-07-07 review finding: this bare except previously made the
+            # documented "exog is None -> pass through" gap indistinguishable
+            # from a genuinely unexpected failure (a numpy shape mismatch, a
+            # future statsmodels version changing .conf_int()'s shape, etc) —
+            # both silently released the raw, unsuppressed model result. Not
+            # narrowing the except itself (the range of model-like objects
+            # that can reach here isn't fully enumerable without over-fitting
+            # to statsmodels specifically), but making the unexpected case
+            # OBSERVABLE instead of silent, so a future regression here is at
+            # least visible in logs rather than a silent disclosure-control
+            # gap nobody notices.
+            try:
+                print(f"[m2py_protection] _suppress_model fell through unsuppressed: {exc!r}")
+            except Exception:
+                pass
             return result

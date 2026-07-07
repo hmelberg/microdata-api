@@ -1618,17 +1618,24 @@ _MINIMAL_KOMMUNE_BASE = {
     },
 }
 
-# Referanseår for alder fra BEFOLKNING_FOEDSELS_AAR_MND (demo-syntese)
-_DEMO_REF_YEAR = 2025
-
-# Felles latent faktor per unit_id (N(0,1)): binder lønn og formue i syntetiske data.
-# Større koeffisient på formue enn på lønn (formue mer «persistent» i forhold til latent evne).
-_NORWAY_LATENT_LOG_WAGE = 0.22
-_NORWAY_LATENT_LOG_WEALTH_NET = 0.52
-_NORWAY_LATENT_LOG_WEALTH_GROSS = 0.44
-_NORWAY_LATENT_LOG_INCOME_OTHER = 0.15
-# Stønads-/ytelsesvariabler: lavere sannsynlighet for utbetaling når latent inntektsevne er høy.
-_NORWAY_LATENT_TRANSFER_HURDLE_SHIFT = 0.04
+# Referanseår for alder fra BEFOLKNING_FOEDSELS_AAR_MND (demo-syntese); felles
+# latent faktor per unit_id (N(0,1)): binder lønn og formue i syntetiske data,
+# større koeffisient på formue enn på lønn (formue mer «persistent» i forhold
+# til latent evne); stønads-/ytelsesvariabler: lavere sannsynlighet for
+# utbetaling når latent inntektsevne er høy.
+#
+# Verdiene bor i mockdata_core.py (stdlib+numpy only, ingen m2py-avhengighet)
+# slik at mockdata_realism.py kan importere dem uten å dra inn hele m2py.py.
+# Var duplisert her til 2026-07-07 (se docs/superpowers/2026-07-07-code-
+# review.md §5) — m2py.py importerer nå derfra i stedet.
+from mockdata_core import (
+    _DEMO_REF_YEAR,
+    _NORWAY_LATENT_LOG_WAGE,
+    _NORWAY_LATENT_LOG_WEALTH_NET,
+    _NORWAY_LATENT_LOG_WEALTH_GROSS,
+    _NORWAY_LATENT_LOG_INCOME_OTHER,
+    _NORWAY_LATENT_TRANSFER_HURDLE_SHIFT,
+)
 
 
 # NB: _norway_*-funksjonene under er deterministiske per (unit_id[, salt]) og

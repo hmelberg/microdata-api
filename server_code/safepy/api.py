@@ -161,6 +161,21 @@ def run(code: str,
         # aggregate intent maps to an HEAuthority via the ReleaseBackend. See duckdb_he.
         return _run_duckdb_he(code, sources, policy, active)
 
+    if dialect == "sqlite":
+        # A deliberately narrower SQL menu than "duckdb" (SELECT/FROM/WHERE/
+        # GROUP BY only, avg/sum/count) — sqlite3 has no AST-introspection
+        # facility to build a generic gate on, so this uses a hand-written
+        # narrow-grammar parser backed by SQLite's own set_authorizer() as an
+        # independent second gate. See sqlite_api and docs/superpowers/specs/
+        # 2026-07-08-sqlite-dialect-design.md.
+        return _run_sqlite(code, sources, policy, active)
+
+    if dialect == "sqlite-he":
+        # SQL over encrypted data on the same narrow grammar; sqlite parses
+        # nothing here either (parse-only via sqlite_grammar), mapped to an
+        # HEAuthority. See sqlite_he.
+        return _run_sqlite_he(code, sources, policy, active)
+
     try:
         namespace = _build_namespace(active, policy, sources, dialect)
         allowed_names = frozenset(namespace)
@@ -325,6 +340,56 @@ def _run_duckdb(code: str, sources: dict, policy: Policy, active: Profile) -> Sa
         return SafeResult(ok=False, kind="error",
                           error={"kind": type(exc).__name__, "message": str(exc)})
     except BaseException as exc:  # noqa: BLE001 - sanitise: a duckdb error message
+        # may quote a data value, so only the exception type is reported.
+        return SafeResult(ok=False, kind="error", error={
+            "kind": "SandboxError",
+            "message": f"your SQL raised {type(exc).__name__} during execution"})
+
+
+def _run_sqlite_he(code: str, sources: dict, policy: Policy, active: Profile) -> SafeResult:
+    """Parse SQL (narrow grammar, never executed) over encrypted sources and
+    release through the shared core. Mirrors _run_sqlite, but the backend is
+    an HEAuthority (see sqlite_he)."""
+    from .sqlite_he import translate_sql_he
+    try:
+        released = translate_sql_he(code, policy, sources)
+        res = mediate(released, policy)
+        res.audit.setdefault("level", policy.level.value)
+        res.audit.setdefault("profile", active.value)
+        res.audit.setdefault("dialect", "sqlite-he")
+        res.results = [res]
+        return res
+    except ValidationError as exc:
+        return SafeResult(ok=False, kind="error", error=exc.as_dict())
+    except (DisclosureError, SandboxError) as exc:
+        return SafeResult(ok=False, kind="error",
+                          error={"kind": type(exc).__name__, "message": str(exc)})
+    except BaseException as exc:  # noqa: BLE001 - sanitise: never leak a data value
+        return SafeResult(ok=False, kind="error", error={
+            "kind": "SandboxError",
+            "message": f"your SQL raised {type(exc).__name__} during translation"})
+
+
+def _run_sqlite(code: str, sources: dict, policy: Policy, active: Profile) -> SafeResult:
+    """Gate (narrow grammar + set_authorizer), execute (locked sqlite3), and
+    release SQL through the shared core."""
+    from .sqlite_api import run_sql
+    verbs = SafeVerbs(policy)
+    try:
+        released = run_sql(code, verbs, sources)
+        res = mediate(released, policy)
+        res.audit.setdefault("level", policy.level.value)
+        res.audit.setdefault("profile", active.value)
+        res.audit.setdefault("dialect", "sqlite")
+        res.catalog = _raw_catalog(sources, policy)
+        res.results = [res]
+        return res
+    except ValidationError as exc:
+        return SafeResult(ok=False, kind="error", error=exc.as_dict())
+    except (DisclosureError, SandboxError) as exc:
+        return SafeResult(ok=False, kind="error",
+                          error={"kind": type(exc).__name__, "message": str(exc)})
+    except BaseException as exc:  # noqa: BLE001 - sanitise: an error message
         # may quote a data value, so only the exception type is reported.
         return SafeResult(ok=False, kind="error", error={
             "kind": "SandboxError",
