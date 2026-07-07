@@ -85,6 +85,7 @@ def grant_email(access_policy: dict | None, email: str) -> dict:
 try:
     import anvil.email
     import anvil.server
+    import anvil.tables as tables
     from anvil.tables import app_tables
     import auth
     _ANVIL = True
@@ -147,6 +148,24 @@ if _ANVIL:
         except Exception:
             pass  # best-effort — Anvil's free tier limits sends/day; never block the request
 
+    @tables.in_transaction
+    def _add_pending_request(sid, email):
+        """Atomic read-check-write (2026-07-07 fix): re-fetches the row inside
+        the transaction so a retry — triggered by a conflict with a concurrent
+        /access_request for a DIFFERENT email, or a concurrent /decide on the
+        SAME source — sees fresh pending_requests, not a stale snapshot from
+        before the endpoint call started. Without this, one of two concurrent
+        requests could silently overwrite the other's pending entry, and a
+        request landing mid-approve could be clobbered by the approve's
+        now-stale write. Returns (row_or_None, added)."""
+        row = app_tables.sources.get(source_id=sid)
+        if row is None or row["status"] == "deleted":
+            return None, False
+        pending, added = add_pending(_cell(row, "pending_requests") or [], email)
+        if added:
+            row["pending_requests"] = pending   # auto-creates the column on first use
+        return row, added
+
     @anvil.server.http_endpoint("/access_request", methods=["POST"],
                                 cross_site_session=False, enable_cors=True)
     def http_access_request():
@@ -158,17 +177,32 @@ if _ANVIL:
         sid = (body.get("source_id") or "").strip()
         if not sid:
             return _json(_GENERIC_OK)
-        row = app_tables.sources.get(source_id=sid)
-        if row is None or row["status"] == "deleted":
+        row, added = _add_pending_request(sid, email)
+        if row is None:
             return _json(_GENERIC_OK)
-        pending, added = add_pending(_cell(row, "pending_requests") or [], email)
         if added:
-            row["pending_requests"] = pending   # auto-creates the column on first use
             owner_email = _cell(row, "owner_email") or ""
             if owner_email:
                 _notify_owner(owner_email, _cell(row, "name") or sid, sid, email)
             _audit(email, "access_request", sid)
         return _json(_GENERIC_OK)
+
+    @tables.in_transaction
+    def _apply_decision(sid, owner_email, email, decision):
+        """Atomic read-check-write (2026-07-07 fix, same reasoning as
+        _add_pending_request above): re-fetches the row inside the
+        transaction so this can't clobber — or be clobbered by — a
+        concurrent /access_request or a second /decide call landing between
+        this call's read and write. Returns the row on success, None if
+        unknown/not-owner (caller maps that to the 404)."""
+        row = app_tables.sources.get(source_id=sid)
+        if row is None or (_cell(row, "owner_email") or "") != owner_email:
+            return None
+        pending = _cell(row, "pending_requests") or []
+        row["pending_requests"] = resolve_pending(pending, email)
+        if decision == "approve":
+            row["access_policy"] = grant_email(_cell(row, "access_policy"), email)
+        return row
 
     @anvil.server.http_endpoint("/access_request/decide", methods=["POST"],
                                 cross_site_session=False, enable_cors=True)
@@ -188,12 +222,8 @@ if _ANVIL:
         decision = (body.get("decision") or "").strip()
         if decision not in ("approve", "deny"):
             return _json({"error": "decision må være approve eller deny"}, status=400)
-        row = app_tables.sources.get(source_id=sid)
-        if row is None or (_cell(row, "owner_email") or "") != user["email"]:
+        row = _apply_decision(sid, user["email"], email, decision)
+        if row is None:
             return _json({"error": f"ukjent kilde: {sid}"}, status=404)
-        pending = _cell(row, "pending_requests") or []
-        row["pending_requests"] = resolve_pending(pending, email)
-        if decision == "approve":
-            row["access_policy"] = grant_email(_cell(row, "access_policy"), email)
         _audit(user["email"], "access_request_" + decision, f"{sid}:{email}")
         return _json({"ok": True})

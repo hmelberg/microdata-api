@@ -17,6 +17,7 @@ import secrets
 import anvil.email
 import anvil.secrets
 import anvil.server
+import anvil.tables as tables
 import anvil.users
 from anvil.server import HttpResponse
 from anvil.tables import app_tables
@@ -175,6 +176,7 @@ def _normalize_magic_code(raw: str) -> str:
     return s
 
 
+@tables.in_transaction
 def consume_magic_code(raw: str) -> dict | None:
     """Validate a magic or shared code; return info about the redemption.
 
@@ -182,6 +184,14 @@ def consume_magic_code(raw: str) -> dict | None:
     Now returns dict | None. auth_endpoints.py /auth/email/verify must be
     updated to use result['kind'] / result['email'] instead of treating the
     return value as a plain email string (tracked in M5-T3).
+
+    @in_transaction (2026-07-07 fix): the shared-code branch below is a
+    read-check-increment on shared_use_count with no locking — two
+    concurrent redemptions could each read the same use_count and both
+    proceed, letting actual logins exceed the admin-configured max_uses (a
+    quota bypass, exactly the workshop-shared-code scenario this field
+    exists for). Anvil retries the whole function body on a write conflict,
+    so this makes the read-check-increment atomic across concurrent callers.
 
     Returns:
         {'kind': 'magic', 'email': str}      — regular per-user magic code
