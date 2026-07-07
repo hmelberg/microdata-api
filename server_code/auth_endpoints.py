@@ -13,41 +13,24 @@ leaking which addresses are registered.
 
 from __future__ import annotations
 
-import json
-
 import anvil.server
 from anvil.server import HttpResponse
 
 import auth
 import utils
+import http_utils
+
+_json = http_utils.json_response
+_load_body = http_utils.load_body
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 
 
-def _json(body: dict, status: int = 200) -> HttpResponse:
-    return HttpResponse(
-        status=status,
-        body=json.dumps(body, ensure_ascii=False),
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
-
-
 def _client_ip() -> str:
     req = anvil.server.request
     return getattr(req, "remote_address", "") or ""
-
-
-def _load_body() -> dict:
-    req = anvil.server.request
-    body = req.body_json
-    if body is None and req.body:
-        try:
-            body = json.loads(req.body.get_bytes().decode("utf-8"))
-        except Exception:
-            body = None
-    return body or {}
 
 
 def _user_payload(user) -> dict:

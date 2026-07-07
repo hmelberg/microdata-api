@@ -14,21 +14,19 @@ activated.
 """
 from __future__ import annotations
 
-import datetime as dt
-
 import anvil.server
 import anvil.users
 from anvil import BlobMedia
 from anvil.tables import app_tables
+import http_utils
 
 VALID_KINDS = {"url", "media", "encrypted_url"}
 VALID_FORMATS = {"csv", "parquet", "he"}   # "he" = safepy-he-v1 encrypted artifact
 VALID_LEVELS = {"public", "protected", "sensitive"}
 VALID_EXEC = {"local", "remote", "strict_remote"}
 
-
-def _utcnow():
-    return dt.datetime.now(dt.timezone.utc)
+_cell = http_utils.cell
+_utcnow = http_utils.utcnow
 
 
 def _require_admin():
@@ -38,19 +36,11 @@ def _require_admin():
     return user
 
 
-def _cell(row, name, default=None):
-    try:
-        return row[name]
-    except Exception:
-        return default
-
-
 def _audit(user, action: str, detail: str):
-    try:
-        app_tables.audit_log.add_row(
-            when=_utcnow(), who=user["email"], action=action, detail=detail)
-    except Exception:
-        pass  # auditing must never block the operation itself
+    # this module's callers already have the user ROW (Anvil Users session),
+    # not just an email string, so this stays a thin wrapper around the
+    # shared http_utils.audit rather than changing every call site.
+    http_utils.audit(user["email"], action, detail)
 
 
 def _row_summary(row) -> dict:

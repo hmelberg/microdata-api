@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import json
 import re
 import secrets
 
@@ -19,7 +18,6 @@ import anvil.secrets
 import anvil.server
 import anvil.tables as tables
 import anvil.users
-from anvil.server import HttpResponse
 from anvil.tables import app_tables
 
 import utils
@@ -29,13 +27,9 @@ from . import eff_wordlist
 # ---------------------------------------------------------------------------
 # HTTP helper
 
+import http_utils
 
-def _json(body: dict, status: int = 200) -> HttpResponse:
-    return HttpResponse(
-        status=status,
-        body=json.dumps(body, ensure_ascii=False),
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
+_json = http_utils.json_response
 
 
 # ---------------------------------------------------------------------------

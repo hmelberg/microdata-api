@@ -26,6 +26,10 @@ import utils
 import validation
 import auth
 import m2py_shim
+import http_utils
+
+_json = http_utils.json_response
+_load_body = http_utils.load_body
 
 
 def _infer_k(question: str, default: int = 20) -> int:
@@ -39,25 +43,6 @@ def _infer_k(question: str, default: int = 20) -> int:
         if 1 <= n <= 60:
             return n
     return default
-
-
-def _json(body: dict, status: int = 200) -> HttpResponse:
-    return HttpResponse(
-        status=status,
-        body=json.dumps(body, ensure_ascii=False),
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
-
-
-def _load_body() -> dict:
-    req = anvil.server.request
-    body = req.body_json
-    if body is None and req.body:
-        try:
-            body = json.loads(req.body.get_bytes().decode("utf-8"))
-        except Exception:
-            body = None
-    return body or {}
 
 
 # Auth lives in auth.py so future phases (Bearer tokens, role checks,

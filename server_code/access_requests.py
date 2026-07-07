@@ -88,42 +88,17 @@ try:
     import anvil.tables as tables
     from anvil.tables import app_tables
     import auth
+    import http_utils
     _ANVIL = True
 except Exception:            # pure test run
     _ANVIL = False
 
 
 if _ANVIL:
-
-    def _json(body, status=200):
-        return anvil.server.HttpResponse(
-            status=status,
-            body=__import__("json").dumps(body, ensure_ascii=False),
-            headers={"Content-Type": "application/json; charset=utf-8"},
-        )
-
-    def _load_body() -> dict:
-        req = anvil.server.request
-        body = req.body_json
-        if body is None and req.body:
-            try:
-                body = __import__("json").loads(req.body.get_bytes().decode("utf-8"))
-            except Exception:
-                body = None
-        return body or {}
-
-    def _cell(row, name, default=None):
-        try:
-            return row[name]
-        except Exception:
-            return default
-
-    def _audit(email, action, detail):
-        try:
-            app_tables.audit_log.add_row(when=_utcnow(), who=email,
-                                         action=action, detail=detail)
-        except Exception:
-            pass  # auditing must never block the operation itself
+    _json = http_utils.json_response
+    _load_body = http_utils.load_body
+    _cell = http_utils.cell
+    _audit = http_utils.audit
 
     # Generic response for /access_request — identical regardless of whether
     # the source exists, is already open to the caller, or the email is

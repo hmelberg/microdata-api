@@ -85,17 +85,18 @@ def audit_rows_to_csv(rows):
 try:
     import anvil.server
     from anvil.server import HttpResponse
+    import http_utils
+    _json = http_utils.json_response
 except ImportError:
     anvil = None
     HttpResponse = None
 
-
-def _json(body: dict, status: int = 200):
-    return HttpResponse(
-        status=status,
-        body=json.dumps(body, ensure_ascii=False),
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
+    def _json(body: dict, status: int = 200):
+        return HttpResponse(
+            status=status,
+            body=json.dumps(body, ensure_ascii=False),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
 
 
 if anvil is not None:
