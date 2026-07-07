@@ -123,6 +123,35 @@ if _ANVIL:
         except Exception:
             pass  # best-effort — Anvil's free tier limits sends/day; never block the request
 
+    # Closes the other half of the loop (2026-07-09): before this, a
+    # requester who was approved (or denied) had no way to find out short of
+    # blindly re-running their script against the source. Symmetric to
+    # _notify_owner above — same best-effort try/except (Anvil's free tier
+    # limits sends/day; a failed notification must never fail the decision
+    # itself, which has already been committed by the time this runs).
+    def _notify_requester(requester_email, source_name, source_id, decision):
+        try:
+            if decision == "approve":
+                subject = "Tilgang innvilget"
+                body = (
+                    f"<p>Hei,</p>"
+                    f"<p>Forespørselen din om tilgang til kilden "
+                    f"<strong>{source_name}</strong> ({source_id}) i "
+                    f"Microdata Script Runner er <strong>godkjent</strong>. "
+                    f"Du kan nå kjøre skript mot kilden på nytt.</p>"
+                )
+            else:
+                subject = "Tilgang avslått"
+                body = (
+                    f"<p>Hei,</p>"
+                    f"<p>Forespørselen din om tilgang til kilden "
+                    f"<strong>{source_name}</strong> ({source_id}) i "
+                    f"Microdata Script Runner er <strong>avslått</strong> av eieren.</p>"
+                )
+            anvil.email.send(to=requester_email, subject=subject, html=body)
+        except Exception:
+            pass  # best-effort — see _notify_owner
+
     @tables.in_transaction
     def _add_pending_request(sid, email):
         """Atomic read-check-write (2026-07-07 fix): re-fetches the row inside
@@ -214,5 +243,6 @@ if _ANVIL:
             return _json({"error": f"ukjent kilde: {sid}"}, status=404)
         if error == "not_pending":
             return _json({"error": f"{email} har ingen ventende forespørsel for {sid}"}, status=400)
+        _notify_requester(email, _cell(row, "name") or sid, sid, decision)
         _audit(user["email"], "access_request_" + decision, f"{sid}:{email}")
         return _json({"ok": True})
