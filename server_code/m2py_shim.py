@@ -112,7 +112,8 @@ def run_with_summary(script: str, max_rows: int | None = None,
 
 
 def run_extended(script: str, sources_req, backend: str = "pandas",
-                 raw: bool = False) -> dict:
+                 raw: bool = False, federated: bool = False,
+                 fed_round=None) -> dict:
     """Resolve each requested source_id to its registered location+level, then
     run the translator on the real data via the synced m2py_remote core.
 
@@ -130,8 +131,12 @@ def run_extended(script: str, sources_req, backend: str = "pandas",
         datasets[s["alias"]] = load_dataframe(src)
         levels.append(src.get("level", "public"))
     policy = resolve_policy(levels)
+    # Fase 2 federert (safestat spec 2026-07-29 §5-6): federated=True gir
+    # kombinerbare, SDC-gatede aggregater i out["stats"]; fed_round er
+    # koordinatorens gjeldende logit-β for Newton-runder.
     out = m2py_remote.run_remote(
-        script, datasets=datasets, backend=backend, policy=policy, raw=raw)
+        script, datasets=datasets, backend=backend, policy=policy, raw=raw,
+        federated=federated, fed_round=fed_round)
     out["_audit_releases"] = []
     out["_audit_level"] = (policy or {}).get("level")
     return out

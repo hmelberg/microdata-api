@@ -122,7 +122,10 @@ def resolve_merge_key(source_cols, target_cols, on_var=None,
     if tgt_key in source_cols:
         return ok(tgt_key, tgt_key)
 
-    common = list(set(source_cols) & set(target_cols))
+    # sorted(): deterministisk valg ved flere felleskolonner — list(set & set)
+    # ga hash-rekkefølge, så nøkkelen kunne variere mellom kjøringer (stille).
+    # Speiler m2py_translate._old_syntax_key, som fikk samme fiks tidligere.
+    common = sorted(set(source_cols) & set(target_cols))
     if common:
         return ok(common[0], common[0])
 

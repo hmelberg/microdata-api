@@ -47,6 +47,27 @@ def get_release_spec():
     return getattr(_release_ctx, "spec", None)
 
 
+def set_federated(flag):
+    """Fase 1 federert (spec 2026-07-29 §5): når satt, legger regress ved
+    sufficient statistics i result.attrs['fedstats'] så en node kan frigi
+    kombinerbare aggregater i stedet for bare koeffisienttabellen."""
+    _release_ctx.federated = bool(flag)
+
+
+def get_federated():
+    return getattr(_release_ctx, "federated", False)
+
+
+def set_fed_round(beta):
+    """Fase 2: koordinatorens gjeldende logit-β for denne runden (én logit
+    per federert skript i v1). None = init-runde (bare terms/n frigis)."""
+    _release_ctx.fed_round_beta = list(beta) if beta is not None else None
+
+
+def get_fed_round():
+    return getattr(_release_ctx, "fed_round_beta", None)
+
+
 def _released_counts(counts, drop=True):
     """Counts (Series) -> suppressed (< min_n masked) + rounded per the active
     release spec; unchanged when no spec is active. drop=True removes masked
@@ -186,22 +207,25 @@ def recode(df, vars, rules, prefix=None):
 # ── row/column shaping ───────────────────────────────────────────────────────
 
 def keep(df, vars=None, cond=None):
+    # Betingelsen FØR kolonnefilteret (emulator-rekkefølgen): `keep x if y == 1`
+    # skal virke selv om y ikke er blant beholdte kolonner.
     out = df
-    if vars:
-        out = out[[c for c in vars if c in out.columns]]
     if cond:
         mask = _py_eval_cond(out, cond)
         out = out.loc[mask]
+    if vars:
+        out = out[[c for c in vars if c in out.columns]]
     return out.reset_index(drop=True).copy()
 
 
 def drop(df, vars=None, cond=None):
+    # Samme rekkefølge som keep: betingelsen kan referere kolonner som droppes.
     out = df
-    if vars:
-        out = out.drop(columns=[c for c in vars if c in out.columns])
     if cond:
         mask = _py_eval_cond(out, cond)
         out = out.loc[~mask]
+    if vars:
+        out = out.drop(columns=[c for c in vars if c in out.columns])
     return out.reset_index(drop=True).copy()
 
 
@@ -630,10 +654,18 @@ def tabulate(df, vars, by=None, missing=False,
     if cellpct:
         denom = out.groupby(grp)["n"].transform("sum") if grp else out["n"].sum()
         out["cellpct"] = 100.0 * out["n"] / denom
+    # Énveis tabell (B2, review 2026-07-24): row/colpct grupperte da på selve
+    # variabelen — hver kategori delt på sin egen sum ga konstant 100.0.
+    # Uten en andre variabel er raden/kolonnen hele tabellen: andel av totalen.
+    _oneway = len(vars) < 2
     if rowpct:
-        out["rowpct"] = 100.0 * out["n"] / out.groupby(grp + [first])["n"].transform("sum")
+        denom = (out.groupby(grp)["n"].transform("sum") if grp else out["n"].sum()) \
+            if _oneway else out.groupby(grp + [first])["n"].transform("sum")
+        out["rowpct"] = 100.0 * out["n"] / denom
     if colpct:
-        out["colpct"] = 100.0 * out["n"] / out.groupby(grp + [second])["n"].transform("sum")
+        denom = (out.groupby(grp)["n"].transform("sum") if grp else out["n"].sum()) \
+            if _oneway else out.groupby(grp + [second])["n"].transform("sum")
+        out["colpct"] = 100.0 * out["n"] / denom
     if chi2 and len(vars) >= 2:
         if grp:
             stats = {k: _chi2_stats(sub, first, second, not missing)
@@ -893,13 +925,10 @@ def sankey(df, vars):
 
 # ── regression family (statsmodels, matching the emulator's model calls) ──────
 
-def _fit_model(df, family, dep, indep, noconstant=False, standardize=False,
-               return_design=False):
-    """Fit one regression model the same way the emulator does (numeric coercion,
-    listwise dropna, optional standardised predictors, intercept unless
-    ``noconstant``). ``family`` in regress/logit/probit/poisson/negative-binomial.
-    With ``return_design`` also returns ``(X, Y)`` and the kept-row index, for
-    prediction."""
+def _design(df, dep, indep, noconstant=False, standardize=False):
+    """Designmatrisen slik _fit_model bygger den (numerisk koersjon, listwise
+    dropna, konstant med mindre noconstant) — UTEN å tilpasse en modell.
+    Brukes også av federert logit (fase 2) som trenger X/Y ved gitt β."""
     import statsmodels.api as sm
     d = df[[dep] + list(indep)].apply(pd.to_numeric, errors="coerce").dropna().astype(float)
     X = d[list(indep)].copy()
@@ -910,7 +939,18 @@ def _fit_model(df, family, dep, indep, noconstant=False, standardize=False,
                 X[v] = (X[v] - X[v].mean()) / sd
     if not noconstant:
         X = sm.add_constant(X, has_constant="add")
-    Y = d[dep]
+    return X, d[dep]
+
+
+def _fit_model(df, family, dep, indep, noconstant=False, standardize=False,
+               return_design=False):
+    """Fit one regression model the same way the emulator does (numeric coercion,
+    listwise dropna, optional standardised predictors, intercept unless
+    ``noconstant``). ``family`` in regress/logit/probit/poisson/negative-binomial.
+    With ``return_design`` also returns ``(X, Y)`` and the kept-row index, for
+    prediction."""
+    import statsmodels.api as sm
+    X, Y = _design(df, dep, indep, noconstant, standardize)
     if family == "regress":
         model = sm.OLS(Y, X).fit()
     elif family == "logit":
@@ -925,7 +965,7 @@ def _fit_model(df, family, dep, indep, noconstant=False, standardize=False,
     else:
         raise ValueError(f"unknown regression family '{family}'")
     if return_design:
-        return model, X, Y, d.index
+        return model, X, Y, Y.index
     return model
 
 
@@ -1015,11 +1055,50 @@ def _coef_table(model):
 
 def regress(df, dep, indep, noconstant=False):
     """OLS coefficient table ``[term, coef, se, t, p]``."""
+    if get_federated():
+        model, X, Y, idx = _fit_model(df, "regress", dep, indep, noconstant,
+                                      return_design=True)
+        out = _coef_table(model)
+        Xa = np.asarray(X, dtype=float)
+        Ya = np.asarray(Y, dtype=float)
+        out.attrs["fedstats"] = {
+            "terms": [str(c) for c in X.columns],
+            "xtx": (Xa.T @ Xa).tolist(),
+            "xty": (Xa.T @ Ya).tolist(),
+            "yty": float(Ya @ Ya),
+            "n": int(len(Ya)),
+            "at_risk": [int(v) for v in (Xa != 0).sum(axis=0)],
+        }
+        return out
     return _coef_table(_fit_model(df, "regress", dep, indep, noconstant))
 
 
 def logit(df, dep, indep, noconstant=False):
     """Logistic-regression coefficient table."""
+    if get_federated():
+        # Fase 2 (spec 2026-07-29 §6): logit poolgjøres ikke fra én frigivelse
+        # — koordinatoren driver Newton-runder. Init (β=None): bare terms/n.
+        # Runde (β gitt): gradient/Hessian/loglik ved β. Ingen lokal fit
+        # (separasjon på små noder ville ellers knekt init-runden).
+        X, Y = _design(df, dep, indep, noconstant)
+        Xa = np.asarray(X, dtype=float)
+        Ya = np.asarray(Y, dtype=float)
+        base = {"terms": [str(c) for c in X.columns], "n": int(len(Ya)),
+                "at_risk": [int(v) for v in (Xa != 0).sum(axis=0)]}
+        beta = get_fed_round()
+        if beta is None:
+            fs = dict(base, model="logit")
+        else:
+            eta = Xa @ np.asarray(beta, dtype=float)
+            p = 1.0 / (1.0 + np.exp(-eta))
+            w = p * (1.0 - p)
+            fs = dict(base, model="logit_round",
+                      grad=(Xa.T @ (Ya - p)).tolist(),
+                      hess=((Xa * w[:, None]).T @ Xa).tolist(),
+                      loglik=float(np.sum(Ya * eta - np.log1p(np.exp(eta)))))
+        out = pd.DataFrame({"info": ["federert logit — kombineres via iterative runder"]})
+        out.attrs["fedstats"] = fs
+        return out
     return _coef_table(_fit_model(df, "logit", dep, indep, noconstant))
 
 

@@ -2025,6 +2025,22 @@ def _suppress_table(
     contributions: dict | None = None,
     secondary: bool = False,
 ):
+    # Fail loudly, never silently (review 2026-07-24): dominance/p_percent er
+    # meningsløse uten bidragsdata — en stille no-op her er verst tenkelige
+    # utfall for et SDC-verktøy (samme filosofi som _reject_inert_share).
+    if dominance is not None and contributions is None:
+        raise ValueError(
+            "suppress(dominance=...) krever contributions={celle: [bidrag, ...]} — "
+            "uten bidragsdata kan dominans ikke vurderes, og regelen ville "
+            "stille blitt hoppet over."
+        )
+    if p_percent is not None and contributions is None:
+        raise ValueError(
+            "suppress(p_percent=...) krever contributions={celle: [bidrag, ...]} — "
+            "uten bidragsdata kan p%-regelen ikke vurderes, og regelen ville "
+            "stille blitt hoppet over."
+        )
+
     out = target.copy()
 
     # primary suppression by frequency

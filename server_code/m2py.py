@@ -639,10 +639,14 @@ class MicroParser:
                     arg = m.group('arg')
                     options_dict[m.group('opt')] = arg.strip() if arg else True
 
-        # 2. Skill ut 'if'-betingelse
+        # 2. Skill ut 'if'-betingelse — quote-bevisst (B3, review 2026-07-24):
+        # naiv split rev strenger med ' if ' i (f.eks. define-labels
+        # s 1 'what if scenario') i stykker. Samme scanner som opsjons-splitten.
         condition = None
-        if ' if ' in line:
-            line, condition = line.split(' if ', 1)
+        _if_pos2 = self._scan_top_level(line, ' if ')
+        if _if_pos2 is not None:
+            condition = line[_if_pos2 + 4:]
+            line = line[:_if_pos2]
         if condition is None and _deferred_condition:
             condition = _deferred_condition
 
@@ -1407,6 +1411,77 @@ def _micro_expr_fixup(expr):
     return ''.join(out)
 
 
+# ── Streng eval-modus (fjernkjøring mot beskyttede kilder) ──────────────────
+# m2py_remote slår denne på når minst én kilde ikke er "public": uttrykk
+# AST-valideres mot en hviteliste (samme filosofi som m2py_translate.
+# _expr_polars_ok) og eval kjøres uten builtins — eval(expr, {}, env)
+# injiserer ellers ekte __builtins__, og et generate-uttrykk har da full
+# Python (filsystem, nettverk, rå rader via exceptions) FØR undertrykkings-
+# laget ser noe. Lokalt (Pyodide/emulator) er modusen alltid av: der kjører
+# brukeren i egen sandkasse mot egne/mock-data, og fri eval er en feature.
+M2PY_STRICT_EVAL = False
+
+
+def set_strict_eval(on):
+    """Slå streng uttrykks-eval av/på (brukes av m2py_remote rundt exec)."""
+    global M2PY_STRICT_EVAL
+    M2PY_STRICT_EVAL = bool(on)
+
+
+# Speiler det ikke-strenge miljøet, der disse nås via injiserte __builtins__.
+# setdefault i _py_eval_expr: elementvise varianter fra functions.py vinner.
+_STRICT_SAFE_BUILTINS = {'int': int, 'float': float, 'str': str, 'min': min,
+                         'max': max, 'abs': abs, 'round': round, 'len': len}
+
+
+def _strict_expr_check(expr):
+    """Valider at et (fixup-et) uttrykk holder seg innenfor microdata-
+    uttrykksspråket: aritmetikk/bool/sammenligning, litteraler, kolonne- og
+    bindingsnavn, kall til kjente funksjoner og np.<fn>. Alt annet avvises
+    med ValueError — høylytt, aldri stille."""
+    import ast
+
+    def _refuse(why):
+        raise ValueError(_t("Personvern: uttrykket er ikke tillatt mot beskyttede data")
+                         + " (" + why + "): " + str(expr))
+
+    allowed = (ast.Expression, ast.BoolOp, ast.And, ast.Or,
+               ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Compare, ast.Call,
+               ast.keyword, ast.Constant, ast.Name, ast.Load,
+               ast.Attribute, ast.Tuple, ast.List,
+               ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod,
+               ast.Pow, ast.USub, ast.UAdd, ast.Not, ast.Invert,
+               ast.BitAnd, ast.BitOr, ast.BitXor,
+               ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+               ast.In, ast.NotIn)
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        _refuse("syntaks")
+    known_calls = set(_EVAL_LOCALS) | set(_STRICT_SAFE_BUILTINS)
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed):
+            _refuse(type(node).__name__)
+        if isinstance(node, ast.Name) and node.id.startswith('_'):
+            _refuse(node.id)
+        if isinstance(node, ast.Attribute):
+            # Kun np.<fn> — all annen attributt-tilgang (Series-metoder,
+            # dunder-vandring som (1).__class__) er utenfor språket.
+            if not (isinstance(node.value, ast.Name) and node.value.id == 'np'
+                    and not node.attr.startswith('_')):
+                _refuse("." + node.attr)
+        if isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Attribute):
+                pass          # allerede validert som np.<fn> over
+            elif not (isinstance(f, ast.Name) and f.id in known_calls):
+                _refuse("ukjent funksjon "
+                        + (f.id if isinstance(f, ast.Name) else type(f).__name__))
+        if isinstance(node, ast.Constant) and not isinstance(
+                node.value, (int, float, complex, str, bool, type(None))):
+            _refuse("literal")
+
+
 def _py_eval_expr(df, expr):
     """
     Evaluer et microdata-uttrykk med ren Python eval:
@@ -1439,8 +1514,15 @@ def _py_eval_expr(df, expr):
     if at_cols:
         for orig, safe in at_cols.items():
             expr = expr.replace(orig, safe)
-    # Kjør ren eval (ingen ekstra sikkerhet nødvendig i dette miljøet)
-    result = eval(expr, {}, env)
+    if M2PY_STRICT_EVAL:
+        # Fjernkjøring mot beskyttet kilde: AST-hviteliste + eval uten builtins.
+        _strict_expr_check(expr)
+        for k, v in _STRICT_SAFE_BUILTINS.items():
+            env.setdefault(k, v)
+        result = eval(expr, {'__builtins__': {}}, env)
+    else:
+        # Lokal/offentlig kjøring: ren eval (brukerens egen sandkasse).
+        result = eval(expr, {}, env)
     if isinstance(result, pd.Series):
         # Sikre riktig index
         if not result.index.equals(df.index):

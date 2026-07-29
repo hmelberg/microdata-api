@@ -538,7 +538,8 @@ def http_run():
 @anvil.server.background_task
 def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
                     audit_alias=None, audit_request_id=None, audit_source_ids=None,
-                    source_keys=None, assembly=None):
+                    source_keys=None, assembly=None, federated=False,
+                    fed_round=None):
     import time
     import safepy_shim
     import query_audit
@@ -574,7 +575,8 @@ def bg_run_extended(script, sources_req, backend, raw, dialect="m2py",
                                            source_keys=source_keys,
                                            assembly=assembly)
         else:
-            out = m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw)
+            out = m2py_shim.run_extended(script, sources_req, backend=backend, raw=raw,
+                                         federated=federated, fed_round=fed_round)
         if isinstance(out, dict) and out.get("err"):
             status, err_msg = "error", out.get("err")
         return out
@@ -655,6 +657,13 @@ def http_run_extended():
     assembly = body.get("assembly")
     if assembly is not None and not isinstance(assembly, dict):
         return _json({"error": "assembly må være et objekt (AssemblySpec)"}, status=400)
+    # Fase 2 federert: nettleser-koordinatoren ber om kombinerbare aggregater
+    # (federated) og sender gjeldende logit-β per Newton-runde (fed_round).
+    federated = bool(body.get("federated", False))
+    fed_round = body.get("fed_round")
+    if fed_round is not None and not (isinstance(fed_round, dict)
+                                      and isinstance(fed_round.get("beta"), list)):
+        return _json({"error": "fed_round må være {beta: [tall]}"}, status=400)
 
     # Audit layer v1: quota gate before compute (spec 2026-07-04).
     import uuid
@@ -675,7 +684,7 @@ def http_run_extended():
 
     task = anvil.server.launch_background_task(
         "bg_run_extended", script, sources_req, backend, raw, dialect,
-        alias, request_id, source_ids, source_keys, assembly)
+        alias, request_id, source_ids, source_keys, assembly, federated, fed_round)
     return _json({"task_id": task.get_id(), "mode": "async"})
 
 
