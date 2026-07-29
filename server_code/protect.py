@@ -672,6 +672,13 @@ def winsorize(
         raise ValueError(f"Unknown winsorize method: {method!r}")
 
     for col in columns:
+        # Masked integer dtypes (Int8..Int64/UInt*, i.e. columns that can hold
+        # pd.NA) refuse .clip() against fractional bounds ("Invalid value
+        # '10.5' for dtype 'Int32'"); plain numpy ints silently upcast. Match
+        # that behaviour explicitly: upcast to nullable Float64 so NA survives.
+        if (pd.api.types.is_extension_array_dtype(out[col].dtype)
+                and pd.api.types.is_integer_dtype(out[col].dtype)):
+            out[col] = out[col].astype("Float64")
         if by is None:
             lo, hi = _bounds(out[col])
             out[col] = out[col].clip(lower=lo, upper=hi)
