@@ -183,6 +183,24 @@ db_schema:
     indexes: []
     server: full
     title: Files
+  keystores:
+    client: none
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: email
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: doc
+      type: string
+    - admin_ui: {}
+      client_hidden: null
+      name: updated
+      type: string
+    indexes: []
+    server: full
+    title: keystores
   limits_config:
     client: none
     columns: []
