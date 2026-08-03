@@ -165,6 +165,20 @@ db_schema:
     indexes: []
     server: full
     title: eval_runs
+  feilrapporter:
+    client: none
+    columns:
+    - admin_ui: {}
+      client_hidden: null
+      name: mottatt
+      type: datetime
+    - admin_ui: {}
+      client_hidden: null
+      name: payload
+      type: string
+    indexes: []
+    server: full
+    title: feilrapporter
   files:
     client: none
     columns:
