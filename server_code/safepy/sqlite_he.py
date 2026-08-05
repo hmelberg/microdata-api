@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the safepy repo. This file is produced by sync_to_api.py.
@@ -24,6 +23,7 @@ Refused:    WHERE (ciphertext can't be filtered — ties into the shared HE
             this grammar's menu at all, so it can't even be spelled).
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 from .errors import DisclosureError, ValidationError
 from .result import Released

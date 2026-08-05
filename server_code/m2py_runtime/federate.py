@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the m2py repo. This file is produced by sync_to_api.py.
@@ -13,6 +12,7 @@ combine_stats/combine_and_render pool N nodes' stats exactly. ONE module for
 both so pytest covers the math the browser (via Pyodide) executes.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import math
 

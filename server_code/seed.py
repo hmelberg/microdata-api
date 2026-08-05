@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """One-shot seeding for tables that need default rows.
 
 Call from the Anvil server console:
@@ -9,6 +8,7 @@ Safe to re-run — existing rows are left untouched.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import datetime as dt
 

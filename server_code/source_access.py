@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # microdata-api/server_code/source_access.py
 """Access decision for /source_access (spec 2026-07-05-encrypted-external-
 sources-design.md §3): given a resolved source row and the caller's verified
@@ -27,6 +26,7 @@ truly anonymous caller. caller_allowed() answers "may this identity use it";
 the endpoints decide whether login itself is required.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 VALID_AUDIENCES = {"owner", "listed", "authenticated", "anyone"}
 

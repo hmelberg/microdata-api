@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # microdata-api/server_code/safepy_shim.py
 """Native shim between /run_extended and the vendored safepy engine.
 
@@ -12,6 +11,7 @@ This adapter is the single seam that decides the transport format (HTML
 fragments for tables, plotly JSON for figures); nothing else knows about it.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import os
 

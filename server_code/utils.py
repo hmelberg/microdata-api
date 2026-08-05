@@ -1,7 +1,7 @@
-import anvil.microsoft.auth
 """Cross-cutting helpers: API-key auth, rate limit, request logging."""
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import datetime as dt
 import hmac

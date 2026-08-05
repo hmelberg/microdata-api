@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # microdata-api/server_code/source_registry.py
 """Source registry for SafeStat/safepy remote compute.
 
@@ -21,6 +20,7 @@ the registered hash and pairs it with the authority private key stored
 Fernet-encrypted on the row (`he_key`).
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 _SOURCES = {
     # Non-public fixture: forced remote + login + suppression. (Bytes happen to

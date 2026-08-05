@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the safepy repo. This file is produced by sync_to_api.py.
@@ -19,6 +18,7 @@ equi-join (left default). Rows/derivation/aggregation are the analysis
 script's job.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 
 class AssemblyError(ValueError):

@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Authentication and authorization helpers.
 
 Phase 1: accepts both `Authorization: Bearer <token>` (user accounts via
@@ -8,6 +7,7 @@ returned principal is either a `users` row (Bearer) or an alias string
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import datetime as dt
 import hashlib

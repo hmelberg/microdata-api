@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the safepy repo. This file is produced by sync_to_api.py.
@@ -26,6 +25,7 @@ the Arrow string dtype and CoW semantics don't change its behaviour.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import numbers
 from typing import Any

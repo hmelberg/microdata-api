@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """BM25 retrieval + synonym expansion + lookup_variable tool backend.
 
 Reads its corpus from Anvil Data Files (not Data Tables):
@@ -18,6 +17,7 @@ changes without restarting the worker.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import json
 import pickle

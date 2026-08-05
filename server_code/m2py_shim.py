@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Thin wrapper over the existing m2py.py asset.
 
 m2py.py is shipped as a server module inside the Anvil app (copied from
@@ -12,6 +11,7 @@ this file so `import m2py` resolves inside server modules.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 # Eager: MicroParser is small, pure-Python; we want it ready for every request.
 from m2py import MicroParser  # type: ignore  # noqa: F401

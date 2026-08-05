@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """HTTP endpoints for user authentication.
 
 Magic-link flow (Phase 1, no Microsoft SSO yet):
@@ -13,6 +12,7 @@ leaking which addresses are registered.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import anvil.server
 from anvil.server import HttpResponse

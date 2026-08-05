@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Claude call with prompt caching + tool use.
 
 Two entry points:
@@ -11,6 +10,7 @@ the prefix hash is stable.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import json
 from typing import Any

@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the safepy repo. This file is produced by sync_to_api.py.
@@ -29,6 +28,7 @@ COUNT(*) pairing with itself — appended to the same SELECT list, so value
 and count come back aligned from one query, one execution.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import sqlite3
 

@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Generisk per-bruker-dokumentlagring (askstat konto-runden fase 2, askstat-
 spec 2026-08-05-konto-runden §Fase 2b). Ett endepunktpar dekker profiles/
 history/askkeys — klienten eier semantikken (askkeys-innholdet er AES-GCM-
@@ -14,6 +13,7 @@ Tabell `userdocs` (opprettes manuelt i Anvil-editoren ved pull):
   email: text, name: text, doc: text, updated: text — én rad per (email, name).
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import json
 

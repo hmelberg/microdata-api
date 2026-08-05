@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # microdata-api/server_code/admin_sources.py
 """Admin CRUD for the `sources` Data Table (Milestone 2).
 
@@ -14,6 +13,7 @@ round-tripping through load_dataframe (the real read path) before the row is
 activated.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import anvil.server
 import anvil.users

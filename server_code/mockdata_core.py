@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the m2py repo. This file is produced by sync_to_api.py.
@@ -26,6 +25,7 @@ Pyodide note: stdlib + numpy only. No pandas dependency at import time.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import hashlib
 import numpy as np

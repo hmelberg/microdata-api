@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # microdata-api/server_code/owner_sources.py
 """Self-service source registration (spec 2026-07-05-encrypted-external-
 sources-design.md §3; m2py page deldata.html).
@@ -13,6 +12,7 @@ validate_registration() is pure (no Anvil) and unit-tested; the HTTP endpoints
 below wrap it. Owners may only overwrite/deactivate their own rows.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import datetime as dt
 import io

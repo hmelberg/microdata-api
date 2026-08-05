@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Static prompt content + assembly helpers.
 
 The cached prefix — system prompt + commands reference + grammar cheat
@@ -9,6 +8,7 @@ question) is appended outside the cache boundary.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import retrieval
 

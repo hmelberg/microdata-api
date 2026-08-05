@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Etterbehandling av MicroInterpreter.output_log -> ren tekst / HTML-dokument.
 
 `output_log` er en liste strenger der tabeller og figurer er innpakket som
@@ -14,6 +13,7 @@ Denne modulen splitter loggen i segmenter og produserer to leveranser:
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import html as _html
 import json

@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the safepy repo. This file is produced by sync_to_api.py.
@@ -31,6 +30,7 @@ exposed, because there is no verb that returns them.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import re
 

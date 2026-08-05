@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the m2py repo. This file is produced by sync_to_api.py.
@@ -20,6 +19,7 @@ without a count column and model objects pass through for now — they are the
 next slice (the DSL ops must emit contribution counts first).
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 PUBLIC = "public"
 PROTECTED = "protected"

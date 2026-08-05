@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the m2py repo. This file is produced by sync_to_api.py.
@@ -14,6 +13,7 @@ policy, and serialize to the JSON shape the SafeStat client renderer consumes.
 The emulator is NOT used here — `datasets` carries real data the caller fetched.
 """
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import contextlib
 import io

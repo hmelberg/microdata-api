@@ -1,4 +1,3 @@
-import anvil.microsoft.auth
 """Tiered validator for generated microdata scripts.
 
 Tier 1 (static, always on): parse each line with MicroParser, check variable
@@ -13,6 +12,7 @@ StatsEngine on a tiny synthetic frame. Opt-in via deep_validate=true.
 """
 
 from __future__ import annotations
+import anvil.microsoft.auth
 
 import re
 from dataclasses import dataclass, field
