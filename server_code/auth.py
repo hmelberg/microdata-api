@@ -23,6 +23,8 @@ from anvil.tables import app_tables
 
 import utils
 import auth_hash
+import sentence_words
+import login_email
 from . import eff_wordlist
 
 
@@ -94,8 +96,10 @@ def issue_session_token(
 
 
 def issue_magic_code(email: str) -> str:
-    """Issue a multi-use magic code tied to an email. Returns a 3-word
-    code (EFF Large Wordlist, hyphen-separated, ~39 bits entropy).
+    """Issue a multi-use magic code tied to an email. Returns a short
+    sentence code («brave-otter-kicked-golden-drum», fem innholdsord fra
+    sentence_words, 40 bits — byttet fra 3 EFF-ord 2026-08-05 for
+    memorerbarhet; delte koder beholder EFF-formen).
 
     Codes are valid for 30 days and can be used multiple times. Each use
     updates last_used. Codes are revoked manually via revoke_session_token
@@ -105,7 +109,7 @@ def issue_magic_code(email: str) -> str:
     (in find_or_create_user).
     """
     rng = secrets.SystemRandom()
-    code = "-".join(rng.choice(eff_wordlist.EFF_WORDS) for _ in range(3))
+    code = sentence_words.generate_sentence_code(rng)
     expires = _utcnow() + dt.timedelta(days=MAGIC_CODE_TTL_DAYS)
     app_tables.auth_tokens.add_row(
         user=None,
@@ -457,37 +461,9 @@ def principal_user(principal):
 # Magic-link email
 
 
-def send_magic_link_email(email: str, code: str, *, lang: str = "no") -> None:
+def send_magic_link_email(email: str, code: str, *, lang: str = "no",
+                          app: str = "microdata") -> None:
     """Send the magic-link email. Anvil's free tier limits sends per day —
     keep it short and obvious."""
-    base = "https://micro.fhi.dev/?login="
-    url = base + code
-    if lang == "en":
-        subject = "Sign in to Microdata Script Runner"
-        html = (
-            "<p>Hi,</p>"
-            "<p>Your sign-in code:</p>"
-            f"<p style=\"font-size: 18px; font-family: monospace; padding: 12px; "
-            f"background: #f4f4f4; border-radius: 4px;\"><strong>{code}</strong></p>"
-            "<p>Paste it in the login dialog in Microdata Script Runner. "
-            "The code is valid for 30 days and works on any device — paste it "
-            "on each machine you want to log in on.</p>"
-            f"<p>Or click here to sign in directly on this device: "
-            f"<a href=\"{url}\">Sign in</a></p>"
-            "<p>If you did not request this, you can ignore this email.</p>"
-        )
-    else:
-        subject = "Logg inn til Microdata Script Runner"
-        html = (
-            "<p>Hei,</p>"
-            "<p>Din pålogginskode:</p>"
-            f"<p style=\"font-size: 18px; font-family: monospace; padding: 12px; "
-            f"background: #f4f4f4; border-radius: 4px;\"><strong>{code}</strong></p>"
-            "<p>Lim den inn i pålogginsdialogen i Microdata Script Runner. "
-            "Koden er gyldig i 30 dager og fungerer på hvilken som helst enhet — "
-            "lim den inn på hver maskin du vil logge inn på.</p>"
-            f"<p>Eller klikk her for å logge inn direkte på denne enheten: "
-            f"<a href=\"{url}\">Logg inn</a></p>"
-            "<p>Hvis du ikke ba om dette, kan du ignorere denne e-posten.</p>"
-        )
+    subject, html = login_email.build_login_email(code, lang=lang, app=app)
     anvil.email.send(to=email, subject=subject, html=html)

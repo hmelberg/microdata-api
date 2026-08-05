@@ -61,6 +61,7 @@ def http_auth_email_request():
     body = _load_body()
     email = (body.get("email") or "").strip().lower()
     lang = body.get("lang") or "no"
+    app = (body.get("app") or "").strip()   # allowlistes i build_login_email
 
     # Always return ok=true so we don't leak which emails are registered or
     # whitelisted. Validation failures still return 400 — bad input is fine
@@ -96,7 +97,7 @@ def http_auth_email_request():
         return _json({"error": "server error"}, status=500)
 
     try:
-        auth.send_magic_link_email(email, code, lang=lang)
+        auth.send_magic_link_email(email, code, lang=lang, app=app)
     except Exception as exc:
         # Best-effort: the code IS issued and valid regardless of send
         # failure (Anvil's per-day send quota, transient downtime, etc.) —
