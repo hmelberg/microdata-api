@@ -295,6 +295,28 @@ db_schema:
     indexes: []
     server: full
     title: sources
+  userdocs:
+    client: none
+    columns:
+    - admin_ui: {order: 0, width: 200}
+      client_hidden: false
+      name: email
+      type: string
+    - admin_ui: {order: 1, width: 200}
+      client_hidden: false
+      name: name
+      type: string
+    - admin_ui: {order: 2, width: 200}
+      client_hidden: false
+      name: doc
+      type: string
+    - admin_ui: {order: 3, width: 200}
+      client_hidden: false
+      name: updated
+      type: string
+    indexes: []
+    server: full
+    title: userdocs
   users:
     client: none
     columns:
