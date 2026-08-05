@@ -21,6 +21,7 @@ import anvil.users
 from anvil.tables import app_tables
 
 import utils
+import auth_hash
 from . import eff_wordlist
 
 
@@ -107,7 +108,7 @@ def issue_magic_code(email: str) -> str:
     expires = _utcnow() + dt.timedelta(days=MAGIC_CODE_TTL_DAYS)
     app_tables.auth_tokens.add_row(
         user=None,
-        token_hash=_hash_token(code),
+        token_hash=auth_hash.hash_code(code),
         kind="magic",
         created=_utcnow(),
         expires=expires,
@@ -136,7 +137,7 @@ def issue_shared_code(
     expires = _utcnow() + dt.timedelta(days=expires_days)
     app_tables.auth_tokens.add_row(
         user=None,
-        token_hash=_hash_token(code),
+        token_hash=auth_hash.hash_code(code),
         kind="shared",
         created=_utcnow(),
         expires=expires,
@@ -158,16 +159,11 @@ def issue_shared_code(
 
 
 def _normalize_magic_code(raw: str) -> str:
-    """Normalize a magic code for verification: lowercase, replace any run of
-    non-alpha characters with a single hyphen.
-
-    So 'Abacus Charity Twelve' → 'abacus-charity-twelve'
-    and 'abacus-charity-twelve' → 'abacus-charity-twelve' (unchanged).
-    """
-    s = raw.lower().strip()
-    s = re.sub(r"[^a-z]+", "-", s)
-    s = s.strip("-")
-    return s
+    """Normalize a magic code for verification — delegert til auth_hash
+    (fase 2-hash-splitten 2026-08-05: koder hashes nå med PBKDF2-600k der;
+    NB eksisterende koder ble invalidert ved deployen og må reutstedes).
+    'Abacus Charity Twelve' → 'abacus-charity-twelve'."""
+    return auth_hash.normalize_code(raw)
 
 
 @tables.in_transaction
@@ -195,7 +191,7 @@ def consume_magic_code(raw: str) -> dict | None:
     normalized = _normalize_magic_code(raw)
     if not normalized:
         return None
-    token_hash = _hash_token(normalized)
+    token_hash = auth_hash.hash_code(normalized)
 
     # Try magic kind first (more common)
     row = _safe_get(app_tables.auth_tokens, token_hash=token_hash, kind="magic")
