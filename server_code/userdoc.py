@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Generisk per-bruker-dokumentlagring (askstat konto-runden fase 2, askstat-
 spec 2026-08-05-konto-runden §Fase 2b). Ett endepunktpar dekker profiles/
 history/askkeys — klienten eier semantikken (askkeys-innholdet er AES-GCM-

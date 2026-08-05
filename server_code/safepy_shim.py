@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 # microdata-api/server_code/safepy_shim.py
 """Native shim between /run_extended and the vendored safepy engine.
 

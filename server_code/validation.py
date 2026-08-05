@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Tiered validator for generated microdata scripts.
 
 Tier 1 (static, always on): parse each line with MicroParser, check variable

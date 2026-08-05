@@ -1,5 +1,6 @@
 from ._anvil_designer import AdminSourcesTemplate
 from anvil import *
+import anvil.microsoft.auth
 import anvil.server
 import anvil.users
 

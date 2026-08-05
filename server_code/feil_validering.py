@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Ren validering for /feil-endepunktet (ingen anvil-imports — pytest-bar).
 
 Kontrakt (askstat-spec 2026-08-03-datasok-og-nedlasting-v1-design.md §1a):

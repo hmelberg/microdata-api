@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 # microdata-api/server_code/admin_sources.py
 """Admin CRUD for the `sources` Data Table (Milestone 2).
 

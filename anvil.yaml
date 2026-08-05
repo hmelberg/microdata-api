@@ -440,7 +440,7 @@ services:
 - client_config: {}
   server_config: {file_table: files}
   source: /runtime/services/anvil/files.yml
-- client_config: {allow_signup: false, confirm_email: true, enable_automatically: true, use_email: true}
+- client_config: {allow_signup: false, confirm_email: true, enable_automatically: true, use_email: true, use_microsoft: false}
   server_config: {user_table: users}
   source: /runtime/services/anvil/users.yml
 - client_config: {}

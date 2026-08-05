@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """HTTP endpoints for user authentication.
 
 Magic-link flow (Phase 1, no Microsoft SSO yet):

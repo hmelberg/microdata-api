@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 # ============================================================================
 # GENERATED COPY — DO NOT EDIT HERE.
 # Source of truth: the safepy repo. This file is produced by sync_to_api.py.

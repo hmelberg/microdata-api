@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 import anvil.files
 from anvil.files import data_files
 import anvil.secrets

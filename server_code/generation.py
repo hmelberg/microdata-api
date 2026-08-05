@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Claude call with prompt caching + tool use.
 
 Two entry points:

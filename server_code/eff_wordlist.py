@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """EFF Large Diceware Wordlist — public domain.
 
 Source: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt

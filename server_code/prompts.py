@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Static prompt content + assembly helpers.
 
 The cached prefix — system prompt + commands reference + grammar cheat

@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 # microdata-api/server_code/source_registry.py
 """Source registry for SafeStat/safepy remote compute.
 

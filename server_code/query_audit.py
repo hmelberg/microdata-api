@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Multi-query audit layer v1: logging + quota for /run_extended.
 
 Spec: safepy/docs/superpowers/specs/2026-07-04-query-audit-layer-design.md.

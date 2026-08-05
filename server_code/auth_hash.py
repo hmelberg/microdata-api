@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Kodehash for magic-/delt-koder (askstat konto-runden fase 2, askstat-spec
 2026-08-05-konto-runden §Fase 2d): PBKDF2-600k med FAST salt — gjør
 DB-dump-knekking av 3-ords koder (~39 bits) dyr, mens verify forblir ett

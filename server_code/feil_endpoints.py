@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """POST /feil — mottak av feilrapporter fra askstat (spec i askstat-repoet:
 docs/superpowers/specs/2026-08-03-datasok-og-nedlasting-v1-design.md §1a).
 

@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 """Etterbehandling av MicroInterpreter.output_log -> ren tekst / HTML-dokument.
 
 `output_log` er en liste strenger der tabeller og figurer er innpakket som

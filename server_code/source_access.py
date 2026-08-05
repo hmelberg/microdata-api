@@ -1,3 +1,4 @@
+import anvil.microsoft.auth
 # microdata-api/server_code/source_access.py
 """Access decision for /source_access (spec 2026-07-05-encrypted-external-
 sources-design.md §3): given a resolved source row and the caller's verified
